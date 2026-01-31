@@ -27,7 +27,7 @@ class Resnet50Encoder(nn.Module):
                 nn.Tanh(),
                 nn.Linear(512, 256),
                 nn.Tanh(),
-                nn.Linear(256, 128)
+                nn.Linear(256, 129)
             ).to(device)
 
     def get_embeddermodel(self, in_size):

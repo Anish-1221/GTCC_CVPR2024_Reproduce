@@ -70,7 +70,19 @@ def ckpt_restore_mprong(path, num_heads, dropout=False, device='cpu'):
             attn_layers=config_obj['ARCHITECTURE']['attn_layers'],
         ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config_obj['LEARNING_RATE'])
-    model.load_state_dict(checkpoint['model_state_dict'])
+
+    # ADD: Handle DDP state dict (keys may have 'module.' prefix)
+    state_dict = checkpoint['model_state_dict']
+    if list(state_dict.keys())[0].startswith('module.'):
+        # Remove module. prefix
+        from collections import OrderedDict
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # Remove 'module.'
+            new_state_dict[name] = v
+        model.load_state_dict(new_state_dict)
+    else:
+        model.load_state_dict(state_dict)
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     return (
         model,

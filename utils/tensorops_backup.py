@@ -274,24 +274,23 @@ def get_average_train_cum_distance(model, testfolder, data_structure, targ_task=
 
     means = {}
     vars = {}
-    with torch.no_grad():
-        for task in tasks:
-            if targ_task is not None and targ_task != task:
-                continue
-            for inputs, times in train_dls[task]:
-                inputs, times = preprocess_batch(inputs, times, device=device, skip_rate=skip_rate)
-                outputs = model(inputs)['outputs']
-                cum_dists = []
-                for output in outputs:
-                    cum_total = get_cum_matrix(output).max()
-                    if not contains_non_float_values(cum_total):
-                        cum_dists.append(cum_total.item())
-                if len(cum_dists) == 0:
-                    print("MODEL DIVERGED")
-                    return None, None
-                means[task] = np.mean(cum_dists)
-                vars[task] = np.var(cum_dists)
-                break
+    for task in tasks:
+        if targ_task is not None and targ_task != task:
+            continue
+        for inputs, times in train_dls[task]:
+            inputs, times = preprocess_batch(inputs, times, device=device, skip_rate=skip_rate)
+            outputs = model(inputs)['outputs']
+            cum_dists = []
+            for output in outputs:
+                cum_total = get_cum_matrix(output).max()
+                if not contains_non_float_values(cum_total):
+                    cum_dists.append(cum_total.item())
+            if len(cum_dists) == 0:
+                print("MODEL DIVERGED")
+                return None, None
+            means[task] = np.mean(cum_dists)
+            vars[task] = np.var(cum_dists)
+            break
     return means, vars
 
 

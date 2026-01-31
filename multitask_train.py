@@ -2,6 +2,10 @@ import json
 
 import torch
 from torch.utils.data import DataLoader
+import os
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 
 from utils.os_util import get_env_variable
 from utils.loss_entry import get_loss_function
@@ -20,9 +24,42 @@ from configs.entry_config import get_generic_config
 
 
 if __name__ == '__main__':
+    import os
+    print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')}")
+    print(f"Available GPUs: {torch.cuda.device_count()}")
+    print(f"Current device: {torch.cuda.current_device()}")
+
+    use_ddp = 'LOCAL_RANK' in os.environ
+
+    if use_ddp:
+        # DDP Setup
+        dist.init_process_group(backend='nccl')
+        local_rank = int(os.environ['LOCAL_RANK'])
+        torch.cuda.set_device(local_rank)
+        device = torch.device(f'cuda:{local_rank}')
+        world_size = dist.get_world_size()
+
+    else:
+        #  Single GPU mode (python)
+        # Check if CUDA_VISIBLE_DEVICES is set
+        visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES', '0')
+        gpu_id = int(visible_devices.split(',')[0]) if visible_devices else 0
+        
+        local_rank = 0
+        
+        # Force the specific GPU
+        if torch.cuda.is_available():
+            torch.cuda.set_device(0)  # This is device 0 in the visible list
+            device = torch.device("cuda:0")
+        else:
+            device = torch.device("cpu")
+        
+        world_size = 1
+        print(f"Single GPU mode - using device: {device}")
+
     # setup logger and pytorch device
     logger = configure_logging_format()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # environment variable
     dset_json_folder = get_env_variable('JSON_DPATH')
@@ -30,10 +67,19 @@ if __name__ == '__main__':
     # get configuration for this experiment
     CFG = get_generic_config(multi_task_setting=True)
 
-    # initialize folder for logging output
-    master_experiment_foldername = CFG.EVAL_PLOTFOLDER + f'/{CFG.EXPERIMENTNAME}'
-    validate_folder(master_experiment_foldername)
-    save_dict_to_json_file(CFG, master_experiment_foldername + '/config.json')
+    if local_rank == 0:
+        # initialize folder for logging output
+        master_experiment_foldername = CFG.EVAL_PLOTFOLDER + f'/{CFG.EXPERIMENTNAME}'
+        validate_folder(master_experiment_foldername)
+        save_dict_to_json_file(CFG, master_experiment_foldername + '/config.json')
+
+    # Broadcast folder name in DDP mode
+    if use_ddp:
+        folder_list = [CFG.EVAL_PLOTFOLDER + f'/{CFG.EXPERIMENTNAME}'] if local_rank == 0 else [None]
+        dist.broadcast_object_list(folder_list, src=0)
+        master_experiment_foldername = folder_list[0]
+    else:
+        master_experiment_foldername = CFG.EVAL_PLOTFOLDER + f'/{CFG.EXPERIMENTNAME}'
 
     # dataset structure json, get DSET variables
     data_structure = data_json_labels_handles(dset_json_folder, dset_name=CFG.DATASET_NAME)
@@ -43,6 +89,7 @@ if __name__ == '__main__':
 
 
     train_dataloaders = {}
+    train_samplers = {} if use_ddp else None
 
     for task in TASKS:
         batch_size = CFG.BATCH_SIZE
@@ -56,9 +103,25 @@ if __name__ == '__main__':
             data_size=CFG.DATA_SIZE,
             lazy_loading=CFG.LAZY_LOAD
         )
-        train_dataloaders[task] = DataLoader(train_set, batch_size=CFG.BATCH_SIZE, collate_fn=jsondataset_collate_fn, drop_last=True, shuffle=True)
-        logger.debug(f'{len(train_dataloaders[task].dataset)} in train set for {task}')
-        logger.debug("Dataloaders successfully obtained.")
+
+        if use_ddp:
+            train_sampler = DistributedSampler(
+                train_set,
+                num_replicas=world_size,
+                rank=local_rank,
+                shuffle=True,
+                seed=42
+            )
+
+            train_samplers[task] = train_sampler
+            train_dataloaders[task] = DataLoader(train_set, batch_size=CFG.BATCH_SIZE, sampler=train_sampler, collate_fn=jsondataset_collate_fn, drop_last=True, shuffle=False, num_workers=4, pin_memory=True)
+        
+        else:
+            train_dataloaders[task] = DataLoader(train_set, batch_size=CFG.BATCH_SIZE, collate_fn=jsondataset_collate_fn, drop_last=True, shuffle=True)
+
+        if local_rank == 0:
+            logger.debug(f'{len(train_dataloaders[task].dataset)} in train set for {task}')
+            logger.debug("Dataloaders successfully obtained.")
 
     if CFG.ARCHITECTURE['MCN']:
         if CFG.ARCHITECTURE['num_heads'] is None:
@@ -79,10 +142,22 @@ if __name__ == '__main__':
         base_model_class, base_model_params = get_base_model_deets(CFG)
         model = base_model_class(**base_model_params)
 
+    model = model.to(device)
+    if use_ddp:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
+
+
     alignment_training_loop(
         model,
         train_dataloaders,
         get_loss_function(CFG),
         master_experiment_foldername,
-        CONFIG=CFG
+        CONFIG=CFG,
+        local_rank=local_rank,
+        train_samplers=train_samplers
     )
+
+    # Cleanup
+    if use_ddp:
+        dist.barrier()
+        dist.destroy_process_group()

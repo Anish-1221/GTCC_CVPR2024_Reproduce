@@ -78,3 +78,15 @@ CONFIG.VERSION = None
 
 # NAME OF FOLDER
 CONFIG.EXPERIMENTNAME = None
+
+# ProTAS specific settings
+CONFIG.USE_PROTAS = False 
+CONFIG.PROTAS_PARAMS = edict({
+    'num_stages': 4,
+    'num_layers': 10,
+    'num_f_maps': 64,
+    'dim': 2048,      # This should match your feature dimension (likely 2048 for ResNet/I3D)
+    'num_classes': 31, # Match your mapping.txt count
+    'causal': True,
+    'use_graph': True # Set to True if your specific model used the graph head
+})

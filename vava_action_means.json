@@ -1,0 +1,814 @@
+{
+    "add_brownie_mix": {
+        "mean": 35960.017525603376,
+        "std": 40804.825268836394,
+        "min": 0.0,
+        "max": 159677.125,
+        "count": 48
+    },
+    "add_honey_or_chocolate_syrup_to_the_cereal": {
+        "mean": 28509.161865234375,
+        "std": 30864.520936749374,
+        "min": 3143.601806640625,
+        "max": 67148.90625,
+        "count": 5
+    },
+    "add_hot_water_to_the_kettle_and_place_it_on_the_stove_and_boil_it": {
+        "mean": 25221.9501953125,
+        "std": 26949.253403565846,
+        "min": 2133.96923828125,
+        "max": 91165.0234375,
+        "count": 11
+    },
+    "add_jam": {
+        "mean": 63990.237471243054,
+        "std": 62563.18426495394,
+        "min": 77.74370574951172,
+        "max": 262721.0625,
+        "count": 65
+    },
+    "add_mayonnaise": {
+        "mean": 19293.74591936384,
+        "std": 23219.21984818382,
+        "min": 379.08197021484375,
+        "max": 75929.625,
+        "count": 14
+    },
+    "add_milk_and_salt": {
+        "mean": 6908.8342628479,
+        "std": 12486.169013978986,
+        "min": 122.88099670410156,
+        "max": 60991.99609375,
+        "count": 28
+    },
+    "add_oil": {
+        "mean": 10532.923270847486,
+        "std": 19300.960172718373,
+        "min": 0.0,
+        "max": 81893.265625,
+        "count": 46
+    },
+    "add_other_half_of_the_bagel": {
+        "mean": 12181.469482421875,
+        "std": 21083.42703134087,
+        "min": 1324.147705078125,
+        "max": 54341.1796875,
+        "count": 5
+    },
+    "add_pepper": {
+        "mean": 11635.128767609596,
+        "std": 20208.70889809713,
+        "min": 0.0,
+        "max": 65759.609375,
+        "count": 48
+    },
+    "add_salt": {
+        "mean": 5275.59203192767,
+        "std": 10712.403501197816,
+        "min": 26.595211029052734,
+        "max": 43526.125,
+        "count": 34
+    },
+    "add_sprinkles": {
+        "mean": 17384.27850341797,
+        "std": 27097.733639531885,
+        "min": 838.5230712890625,
+        "max": 92381.4765625,
+        "count": 40
+    },
+    "add_various_sauces_and_vegetables": {
+        "mean": 6971.955272165934,
+        "std": 14805.35069466024,
+        "min": 57.41306686401367,
+        "max": 94585.328125,
+        "count": 75
+    },
+    "add_water": {
+        "mean": 7420.394424411229,
+        "std": 16619.929130978588,
+        "min": 5.692242622375488,
+        "max": 78474.0078125,
+        "count": 35
+    },
+    "align_and_insert_the_wheel_in_the_wheel_axel_in_the_partial_model": {
+        "mean": 8159.866398111979,
+        "std": 7956.441901746284,
+        "min": 794.142822265625,
+        "max": 32834.76171875,
+        "count": 15
+    },
+    "align_and_insert_washers_and_rod_in_the_partial_model": {
+        "mean": 33151.6406223463,
+        "std": 24896.871298884093,
+        "min": 789.8041381835938,
+        "max": 97797.5,
+        "count": 23
+    },
+    "align_and_screw_gray_angled_perforated_bar_with_red_angled_perforated_bar_and_washer_in_the_partial_model": {
+        "mean": 37791.898108440895,
+        "std": 33586.31778195419,
+        "min": 3821.243408203125,
+        "max": 135273.421875,
+        "count": 23
+    },
+    "align_and_screw_red_angled_perforated_bar_with_the_white_angled_perforated_bar_in_the_partial_model": {
+        "mean": 27860.660017533737,
+        "std": 26809.03174168634,
+        "min": 977.1893310546875,
+        "max": 97246.765625,
+        "count": 22
+    },
+    "align_and_screw_red_perforated_bar_with_the_partial_model": {
+        "mean": 35908.811880258414,
+        "std": 37452.034552675424,
+        "min": 732.69384765625,
+        "max": 143749.546875,
+        "count": 39
+    },
+    "align_and_screw_red_perforated_junction_bar_with_the_other_red_perforated_junction_bar": {
+        "mean": 48894.56151399158,
+        "std": 39156.119396579044,
+        "min": 240.1355438232422,
+        "max": 127641.6484375,
+        "count": 21
+    },
+    "align_and_screw_red_perforated_junction_bars_with_the_partial_model": {
+        "mean": 50608.0908610026,
+        "std": 52341.76809898939,
+        "min": 299.1671142578125,
+        "max": 166165.8125,
+        "count": 33
+    },
+    "align_and_screw_the_partial_model_with_gray_perforated_bar_and_white_angled_perforated_bar": {
+        "mean": 57100.34716796875,
+        "std": 42196.08015556093,
+        "min": 3018.3583984375,
+        "max": 157166.25,
+        "count": 28
+    },
+    "align_and_screw_the_red_angled_perforated_bar_with_one_gray_angled_perforated_bar_in_the_partial_model": {
+        "mean": 28319.056711370296,
+        "std": 22876.351326324355,
+        "min": 462.6728210449219,
+        "max": 80217.734375,
+        "count": 22
+    },
+    "align_and_screw_the_red_four_perforated_junction_bar__gray_perforated_bar__and_white_angled_perforated_bar": {
+        "mean": 35919.00343366351,
+        "std": 34920.59051969483,
+        "min": 921.8530883789062,
+        "max": 132444.109375,
+        "count": 35
+    },
+    "align_and_screw_the_red_perforated_bar_with_gray_angled_perforated_bar_and_red_angled_perforated_bar_in_the_partial_model": {
+        "mean": 25666.137263615925,
+        "std": 20286.48245309222,
+        "min": 102.94349670410156,
+        "max": 70871.515625,
+        "count": 24
+    },
+    "align_and_screw_wheel_axel_with_the_partial_model": {
+        "mean": 31850.742277446545,
+        "std": 38104.98798942051,
+        "min": 3490.725341796875,
+        "max": 120545.8046875,
+        "count": 19
+    },
+    "align_the_wheel__washer__partial_model_and_pass_the_rod_through_them": {
+        "mean": 64529.16734778363,
+        "std": 48249.80575979758,
+        "min": 1631.8546142578125,
+        "max": 187562.921875,
+        "count": 23
+    },
+    "apply_peanut_butter": {
+        "mean": 62220.15126985822,
+        "std": 52516.764371129684,
+        "min": 76.11573028564453,
+        "max": 204490.984375,
+        "count": 70
+    },
+    "apply_pizza_sauce_on_the_batter": {
+        "mean": 64482.5331103007,
+        "std": 39710.68641798737,
+        "min": 152.6017608642578,
+        "max": 154729.671875,
+        "count": 36
+    },
+    "assemble_support": {
+        "mean": 26582.584396362305,
+        "std": 27195.825643536387,
+        "min": 470.7133483886719,
+        "max": 94902.921875,
+        "count": 34
+    },
+    "background": {
+        "mean": 61962.1927442638,
+        "std": 115051.51303610347,
+        "min": 0.0,
+        "max": 2053004.625,
+        "count": 4226
+    },
+    "break_eggs": {
+        "mean": 12741.930116428164,
+        "std": 19658.938959698356,
+        "min": 78.31059265136719,
+        "max": 67667.6953125,
+        "count": 127
+    },
+    "chop_vegetables": {
+        "mean": 20759.19517566439,
+        "std": 32280.14017208874,
+        "min": 0.0,
+        "max": 256529.75,
+        "count": 773
+    },
+    "cover_pizza_crust_with_ketchup": {
+        "mean": 36880.29288155692,
+        "std": 44685.536312651144,
+        "min": 4088.408447265625,
+        "max": 155715.453125,
+        "count": 14
+    },
+    "cut_and_add_pepperoni_on_the_batter": {
+        "mean": 120771.07493452592,
+        "std": 87348.06172030358,
+        "min": 2321.179443359375,
+        "max": 390642.90625,
+        "count": 44
+    },
+    "cut_hot_dog/sausage": {
+        "mean": 28939.95295061384,
+        "std": 15336.166483759946,
+        "min": 3697.854248046875,
+        "max": 50619.34375,
+        "count": 7
+    },
+    "cut_the_bun_into_pieces": {
+        "mean": 8923.376514781605,
+        "std": 15906.47871237083,
+        "min": 690.5389404296875,
+        "max": 57671.38671875,
+        "count": 11
+    },
+    "drain_excess_water": {
+        "mean": 5539.778389670632,
+        "std": 5668.696566431039,
+        "min": 685.8306274414062,
+        "max": 22589.91015625,
+        "count": 22
+    },
+    "fill_pan_with_water_and_keep_it_to_boil": {
+        "mean": 7310.212366104126,
+        "std": 7862.923348410382,
+        "min": 441.8941345214844,
+        "max": 26199.943359375,
+        "count": 16
+    },
+    "fill_the_bowl_with_milk": {
+        "mean": 10556.326434326173,
+        "std": 22674.187854746222,
+        "min": 1014.5132446289062,
+        "max": 78371.125,
+        "count": 10
+    },
+    "fit_the_rim_on_the_wheel": {
+        "mean": 40747.025971912204,
+        "std": 33606.048673816,
+        "min": 5081.2177734375,
+        "max": 115255.1875,
+        "count": 21
+    },
+    "flip_the_mixture": {
+        "mean": 36636.74294075599,
+        "std": 34716.74834521966,
+        "min": 51.04196548461914,
+        "max": 112723.34375,
+        "count": 39
+    },
+    "fry_a_piece_of_bacon_in_the_skillet": {
+        "mean": 10554.578534444174,
+        "std": 19485.041543341224,
+        "min": 332.54571533203125,
+        "max": 100772.9140625,
+        "count": 24
+    },
+    "fry_the_mushrooms": {
+        "mean": 20971.648315429688,
+        "std": 32156.260106431164,
+        "min": 1461.69873046875,
+        "max": 76657.7109375,
+        "count": 4
+    },
+    "garnish_the_bread": {
+        "mean": 21607.19578756605,
+        "std": 30950.929469651175,
+        "min": 21.280941009521484,
+        "max": 101647.8515625,
+        "count": 28
+    },
+    "garnish_the_burger": {
+        "mean": 6979.269314888196,
+        "std": 13864.725900191512,
+        "min": 222.3386993408203,
+        "max": 81118.7265625,
+        "count": 39
+    },
+    "grate_and_add_cheese_on_the_batter": {
+        "mean": 146865.68192967828,
+        "std": 114443.52870689884,
+        "min": 635.4887084960938,
+        "max": 397631.0625,
+        "count": 53
+    },
+    "heat_the_oil_on_medium_heat": {
+        "mean": 5715.875,
+        "std": 2981.828125,
+        "min": 2734.046875,
+        "max": 8697.703125,
+        "count": 2
+    },
+    "insert_stake": {
+        "mean": 17495.48989299192,
+        "std": 24949.711166648198,
+        "min": 370.56744384765625,
+        "max": 98952.75,
+        "count": 59
+    },
+    "insert_support": {
+        "mean": 61488.65931596427,
+        "std": 90436.08364858355,
+        "min": 243.14926147460938,
+        "max": 544036.875,
+        "count": 58
+    },
+    "insert_support_tab": {
+        "mean": 24579.151073879664,
+        "std": 29884.667681757204,
+        "min": 361.7297058105469,
+        "max": 129281.28125,
+        "count": 72
+    },
+    "mix_brownie_mix_and_eggs": {
+        "mean": 117516.83322016399,
+        "std": 108147.67218570304,
+        "min": 0.0,
+        "max": 454673.6875,
+        "count": 75
+    },
+    "mix_egg_mixture": {
+        "mean": 31714.129966430664,
+        "std": 38526.46067930512,
+        "min": 65.93858337402344,
+        "max": 160164.09375,
+        "count": 75
+    },
+    "mix_pasta_and_chopped_vegetables": {
+        "mean": 12264.193647217917,
+        "std": 22559.19183263276,
+        "min": 3.272793769836426,
+        "max": 190052.546875,
+        "count": 143
+    },
+    "mix_peanut_butter_and_honey_mixture": {
+        "mean": 17131.266339337384,
+        "std": 18766.239569723013,
+        "min": 2706.460693359375,
+        "max": 86828.8125,
+        "count": 27
+    },
+    "mix_the_eggs": {
+        "mean": 27563.923363868227,
+        "std": 40488.69837876123,
+        "min": 238.28660583496094,
+        "max": 208511.96875,
+        "count": 94
+    },
+    "mix_vegetables": {
+        "mean": 26855.371086597443,
+        "std": 31543.560599682263,
+        "min": 46.517677307128906,
+        "max": 83855.53125,
+        "count": 16
+    },
+    "peel_the_carrot": {
+        "mean": 44310.46858738491,
+        "std": 42119.058143464994,
+        "min": 245.5979461669922,
+        "max": 176565.625,
+        "count": 35
+    },
+    "peel_the_cucumber": {
+        "mean": 67048.0359173943,
+        "std": 56677.11167638749,
+        "min": 290.8603515625,
+        "max": 238135.53125,
+        "count": 34
+    },
+    "pickup_and_open_stakebag": {
+        "mean": 11357.389015197754,
+        "std": 17622.063715393615,
+        "min": 387.1356201171875,
+        "max": 79093.421875,
+        "count": 28
+    },
+    "pickup_and_open_supportbag": {
+        "mean": 22923.368943434496,
+        "std": 19013.56518912534,
+        "min": 1481.1234130859375,
+        "max": 69486.171875,
+        "count": 13
+    },
+    "pickup_and_open_tentbag": {
+        "mean": 18645.012545072117,
+        "std": 21730.85819920158,
+        "min": 944.0247802734375,
+        "max": 59063.94140625,
+        "count": 13
+    },
+    "pickup_and_place_ventcover": {
+        "mean": 23646.247605187553,
+        "std": 31574.13301338309,
+        "min": 99.43746185302734,
+        "max": 124687.03125,
+        "count": 28
+    },
+    "place_guyline": {
+        "mean": 28430.8621893414,
+        "std": 40264.5587633584,
+        "min": 68.7603759765625,
+        "max": 199734.890625,
+        "count": 59
+    },
+    "place_the_CPU_Fan_and_fix_it": {
+        "mean": 68034.53005159818,
+        "std": 56353.14585262802,
+        "min": 284.74163818359375,
+        "max": 196342.34375,
+        "count": 26
+    },
+    "place_the_CPU_and_fix_it": {
+        "mean": 31843.92353515625,
+        "std": 51396.49768258119,
+        "min": 3458.881103515625,
+        "max": 210478.09375,
+        "count": 15
+    },
+    "place_the_Hard_disk_and_fix_it": {
+        "mean": 10681.152294921874,
+        "std": 21864.367605336265,
+        "min": 1827.895263671875,
+        "max": 91497.375,
+        "count": 15
+    },
+    "place_the_RAM_and_fix_it": {
+        "mean": 42366.546369280135,
+        "std": 45681.62480159498,
+        "min": 3392.065185546875,
+        "max": 155152.46875,
+        "count": 14
+    },
+    "place_the_SMPS_and_fix_it": {
+        "mean": 29535.0512148729,
+        "std": 35385.798442665444,
+        "min": 573.4659423828125,
+        "max": 103393.9765625,
+        "count": 67
+    },
+    "place_the_cabinet_cover": {
+        "mean": 10513.851712740385,
+        "std": 2908.950327026466,
+        "min": 4831.95361328125,
+        "max": 15351.73046875,
+        "count": 13
+    },
+    "place_the_cabinet_fan_and_fix_it": {
+        "mean": 22944.873334612166,
+        "std": 33002.480454110744,
+        "min": 575.4111938476562,
+        "max": 140203.390625,
+        "count": 49
+    },
+    "place_the_motherboard_and_fix_it": {
+        "mean": 31357.654213905334,
+        "std": 25766.808039012165,
+        "min": 1710.92041015625,
+        "max": 115516.90625,
+        "count": 128
+    },
+    "place_toppings_and_cheese_on_the_pizza": {
+        "mean": 27120.934426852637,
+        "std": 33046.907358007746,
+        "min": 53.536434173583984,
+        "max": 121047.8359375,
+        "count": 28
+    },
+    "plug_first_handlebar_in_the_partial_model": {
+        "mean": 8790.333768956802,
+        "std": 12087.196879989733,
+        "min": 1223.9732666015625,
+        "max": 52903.1796875,
+        "count": 17
+    },
+    "plug_second_handlebar_in_the_partial_model": {
+        "mean": 4649.534292120683,
+        "std": 3580.8453496194443,
+        "min": 982.7648315429688,
+        "max": 15909.77734375,
+        "count": 19
+    },
+    "plug_the_wires": {
+        "mean": 131088.32217261905,
+        "std": 82049.64476468768,
+        "min": 3774.0234375,
+        "max": 325607.75,
+        "count": 21
+    },
+    "pour_juice_into_a_cup": {
+        "mean": 7415.904107230051,
+        "std": 13741.876046305086,
+        "min": 307.3806457519531,
+        "max": 56619.1015625,
+        "count": 14
+    },
+    "pour_oil_in_the_pan": {
+        "mean": 7102.625649679275,
+        "std": 16304.209517166391,
+        "min": 61.893985748291016,
+        "max": 62729.42578125,
+        "count": 42
+    },
+    "pour_oil_in_the_pan_and_heat_over_medium_heat_on_the_stove": {
+        "mean": 11673.064612893497,
+        "std": 14845.598063038857,
+        "min": 331.5674133300781,
+        "max": 49762.01953125,
+        "count": 17
+    },
+    "pour_some_cereal_into_the_bowl": {
+        "mean": 28850.27823708274,
+        "std": 31790.85364462893,
+        "min": 743.1968383789062,
+        "max": 85537.8046875,
+        "count": 11
+    },
+    "pour_the_egg_mixture_in_the_pan": {
+        "mean": 37104.59365977412,
+        "std": 40395.974784910526,
+        "min": 630.7166748046875,
+        "max": 111414.1484375,
+        "count": 46
+    },
+    "pour_the_mixture_in_the_tray": {
+        "mean": 79128.40051120665,
+        "std": 49081.31565811746,
+        "min": 535.4275512695312,
+        "max": 226256.5625,
+        "count": 41
+    },
+    "pre-heat_the_oven": {
+        "mean": 31360.57275390625,
+        "std": 28527.58740234375,
+        "min": 2832.9853515625,
+        "max": 59888.16015625,
+        "count": 2
+    },
+    "press_the_bread_slices_together": {
+        "mean": 8672.665735371907,
+        "std": 15665.287739878098,
+        "min": 75.53712463378906,
+        "max": 58547.84765625,
+        "count": 30
+    },
+    "put_a_teabag_into_the_cup_and_add_boiling_water_to_it": {
+        "mean": 23626.19836321744,
+        "std": 30519.392023427394,
+        "min": 88.47037506103516,
+        "max": 117655.015625,
+        "count": 22
+    },
+    "put_bread_on_the_plate": {
+        "mean": 8997.196063225087,
+        "std": 16275.774985009077,
+        "min": 1.2494912147521973,
+        "max": 48612.2578125,
+        "count": 13
+    },
+    "put_cheese_on_the_patty_in_the_pan": {
+        "mean": 3833.029333496094,
+        "std": 1805.764159013256,
+        "min": 876.8519287109375,
+        "max": 7229.4453125,
+        "count": 10
+    },
+    "put_omelette_in_the_plate": {
+        "mean": 20907.21825480461,
+        "std": 25821.78100267866,
+        "min": 119.4040756225586,
+        "max": 97098.4765625,
+        "count": 32
+    },
+    "put_pasta_into_pan_filled_with_water": {
+        "mean": 5169.5537010192875,
+        "std": 5890.308337505436,
+        "min": 59.56131362915039,
+        "max": 22791.23828125,
+        "count": 15
+    },
+    "put_peanut_butter_and_honey_into_a_microwacve-safe_bowl_and_microwave": {
+        "mean": 23697.143447875977,
+        "std": 29465.221963375607,
+        "min": 2525.275146484375,
+        "max": 122866.0703125,
+        "count": 32
+    },
+    "put_the_patty_in_the_pan_and_cook_it": {
+        "mean": 21396.128468563682,
+        "std": 37640.1775634936,
+        "min": 232.528564453125,
+        "max": 191600.421875,
+        "count": 76
+    },
+    "put_the_pizza_in_the_oven": {
+        "mean": 9881.315188090006,
+        "std": 17609.700792832828,
+        "min": 62.363616943359375,
+        "max": 67636.71875,
+        "count": 33
+    },
+    "put_vegetables_in_a_bowl": {
+        "mean": 28890.104439290364,
+        "std": 38677.49648189088,
+        "min": 865.59326171875,
+        "max": 129900.265625,
+        "count": 30
+    },
+    "put_vegetables_on_bread": {
+        "mean": 32999.771573326805,
+        "std": 33087.82902232716,
+        "min": 42.271976470947266,
+        "max": 93789.1953125,
+        "count": 22
+    },
+    "remove_the_CPU": {
+        "mean": 36844.42195638021,
+        "std": 30028.05777638898,
+        "min": 3047.941162109375,
+        "max": 77495.71875,
+        "count": 9
+    },
+    "remove_the_CPU_Fan": {
+        "mean": 73580.4795689053,
+        "std": 72532.0767936192,
+        "min": 104.23612213134766,
+        "max": 172366.703125,
+        "count": 18
+    },
+    "remove_the_Hard_disk": {
+        "mean": 26966.14613172743,
+        "std": 36299.83014389391,
+        "min": 3018.866943359375,
+        "max": 95903.078125,
+        "count": 9
+    },
+    "remove_the_RAM": {
+        "mean": 9827.032931857639,
+        "std": 6751.830440587929,
+        "min": 3756.53515625,
+        "max": 23194.0,
+        "count": 9
+    },
+    "remove_the_SMPS": {
+        "mean": 24453.8431672127,
+        "std": 36818.0241100079,
+        "min": 1205.149658203125,
+        "max": 107517.6484375,
+        "count": 31
+    },
+    "remove_the_cabinet_cover": {
+        "mean": 13284.804460313586,
+        "std": 12884.748946441523,
+        "min": 500.7158508300781,
+        "max": 33089.24609375,
+        "count": 9
+    },
+    "remove_the_cabinet_fan": {
+        "mean": 28369.8046985973,
+        "std": 37216.304861843775,
+        "min": 157.90179443359375,
+        "max": 92895.7109375,
+        "count": 22
+    },
+    "remove_the_motherboard": {
+        "mean": 31701.987079326922,
+        "std": 31813.209235935155,
+        "min": 630.4208984375,
+        "max": 100089.625,
+        "count": 78
+    },
+    "rotate_the_partial_model_by_180_degrees": {
+        "mean": 34162.881567382814,
+        "std": 33009.544227054226,
+        "min": 1225.3453369140625,
+        "max": 91711.6015625,
+        "count": 5
+    },
+    "spray_oil_on_the_tray": {
+        "mean": 13891.836526769213,
+        "std": 27440.130260645667,
+        "min": 0.36050090193748474,
+        "max": 88304.0,
+        "count": 32
+    },
+    "spread_cream_cheese_onto_a_piece_of_bagel": {
+        "mean": 17530.035977363586,
+        "std": 18355.573214030795,
+        "min": 177.21072387695312,
+        "max": 84615.5703125,
+        "count": 32
+    },
+    "spread_tent": {
+        "mean": 20875.433954309534,
+        "std": 24392.178706347924,
+        "min": 255.29196166992188,
+        "max": 89880.609375,
+        "count": 27
+    },
+    "spread_the_batter_on_the_tray": {
+        "mean": 57745.00246582031,
+        "std": 62730.125982436315,
+        "min": 603.5938720703125,
+        "max": 388206.78125,
+        "count": 40
+    },
+    "spread_the_mixture_on_the_bread": {
+        "mean": 53233.79751747533,
+        "std": 36580.150709538,
+        "min": 2056.21044921875,
+        "max": 116758.1484375,
+        "count": 19
+    },
+    "take_cheese_out_of_its_cover_and_put_it_on_the_bread": {
+        "mean": 21537.83262833305,
+        "std": 30085.243085618196,
+        "min": 736.3135375976562,
+        "max": 98640.5703125,
+        "count": 23
+    },
+    "take_out_the_patty_and_put_it_on_the_burger": {
+        "mean": 8497.226914723715,
+        "std": 16443.5410367853,
+        "min": 142.26747131347656,
+        "max": 62390.16796875,
+        "count": 12
+    },
+    "take_turkey_out_of_its_cover_and_put_it_on_the_bread": {
+        "mean": 26322.174722290038,
+        "std": 32561.3478594795,
+        "min": 511.52850341796875,
+        "max": 99334.3671875,
+        "count": 20
+    },
+    "take_two_slices_of_bread": {
+        "mean": 8933.531392877752,
+        "std": 11591.150147663202,
+        "min": 96.59483337402344,
+        "max": 43168.57421875,
+        "count": 11
+    },
+    "tie_top_of_the_tent": {
+        "mean": 21777.86669921875,
+        "std": 22448.085702087363,
+        "min": 4325.45751953125,
+        "max": 65793.984375,
+        "count": 5
+    },
+    "top_the_remaining_half_of_the_burger": {
+        "mean": 6947.232129778181,
+        "std": 8929.020202749489,
+        "min": 436.4411926269531,
+        "max": 27904.267578125,
+        "count": 7
+    },
+    "transfer_the_eggs_to_a_plate": {
+        "mean": 14576.56622134938,
+        "std": 22273.21001654457,
+        "min": 317.465087890625,
+        "max": 91528.53125,
+        "count": 17
+    },
+    "unplug_the_wires": {
+        "mean": 62319.02294921875,
+        "std": 38726.22882970866,
+        "min": 2538.439453125,
+        "max": 114069.390625,
+        "count": 12
+    },
+    "wash_pasta": {
+        "mean": 24124.692783702503,
+        "std": 34451.639102759174,
+        "min": 432.2380065917969,
+        "max": 124532.65625,
+        "count": 22
+    }
+}

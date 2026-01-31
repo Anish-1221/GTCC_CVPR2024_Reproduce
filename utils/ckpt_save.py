@@ -27,6 +27,8 @@ def ckpt_save(
 
 def get_ckpt_MCN(folder, num_heads, device, dropout=False):
     ckpts = glob.glob(folder + f'/ckpt/*')
+    # Sort checkpoints numerically by epoch number to get the highest epoch
+    ckpts = sorted(ckpts, key=lambda x: int(x.split('epoch-')[-1].split('.')[0]))
     try:
         best_ckpt_file = ckpts[-1]
         ckpt_handle = ".".join(best_ckpt_file.split('/')[-1].split('.')[:-1])

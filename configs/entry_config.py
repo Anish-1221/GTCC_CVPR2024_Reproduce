@@ -58,6 +58,11 @@ def get_generic_config(multi_task_setting=False, delta=None, n_components=None):
     CONFIG.ARCHITECTURE['MCN'] = MCN
     CONFIG.BASEARCH.ARCHITECTURE = base_arch
 
+    # ADD THESE LINES:
+    # if using GTCC with resnet50, enable dropping for the base encoder
+    if loss_type == 'GTCC' and base_arch == 'resnet50' and not MCN:
+        CONFIG.BASEARCH.Resnet50_ARCH['dropping'] = True
+
     # set the loss function type
     CONFIG.LOSS_TYPE[loss_type] = True
 

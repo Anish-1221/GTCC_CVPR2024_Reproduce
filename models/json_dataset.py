@@ -15,6 +15,22 @@ from utils.train_util import get_data_subfolder_and_extension, get_npy_shape_fro
 
 logger = configure_logging_format()
 
+def get_fps_scale_factor(handle):
+    """Determine FPS scaling based on video source dataset"""
+    if 'OP' in handle or 'P0' in handle or 'P1' in handle or 'P2' in handle:  # EGTEA
+        return 24
+    elif handle.startswith('S') and '_' in handle:  # CMU_Kitchens
+        return 30
+    elif 'tent' in handle.lower():  # EpicTent
+        return 60
+    elif handle.isdigit() or (len(handle) == 4 and handle.isdigit()):  # MECCANO
+        return 12
+    elif 'Head_' in handle:  # PC_assembly/disassembly
+        return 12
+    else:
+        print(f"WARNING: Unknown dataset for {handle}, defaulting to 30 FPS")
+        return 30
+
 def jsondataset_get_train_test(
     task,
     task_json,
@@ -114,19 +130,36 @@ class JSONDataset(Dataset):
             assert f'{data_folder}/{handle}.{extension}' in all_embeddings_files, f'File {handle}.{extension} not in {data_folder} folder'
             # log the data filename
             data = f'{data_folder}/{handle}.{extension}'
-            times_dict = {'step': action_sequence, 'start_frame': [int(t) for t in start_times], 'end_frame': [int(t) for t in end_times], 'name': handle}
+            # times_dict = {'step': action_sequence, 'start_frame': [int(t) for t in start_times], 'end_frame': [int(t) for t in end_times], 'name': handle}
+            fps_scale = get_fps_scale_factor(handle)
+            times_dict = {'step': action_sequence, 'start_frame': [int(t / fps_scale) for t in start_times], 'end_frame': [int(t / fps_scale) for t in end_times], 'name': handle}
             N = get_npy_shape_from_file(data)[0]
             
             if N > times_dict['end_frame'][-1] - 1:
                 times_dict['end_frame'][-1] = N-1
+            # elif N < times_dict['end_frame'][-1] - 1:
+            #     while N < times_dict['end_frame'][-1] - 1:
+            #         if N > times_dict['start_frame'][-1]+1:
+            #             times_dict['end_frame'][-1] = N-1
+            #             break
+            #         else:
+            #             times_dict['start_frame'] = times_dict['start_frame'][:-1]
+            #             times_dict['end_frame'] = times_dict['end_frame'][:-1]
+
+
             elif N < times_dict['end_frame'][-1] - 1:
-                while N < times_dict['end_frame'][-1] - 1:
+                while len(times_dict['end_frame']) > 0 and N < times_dict['end_frame'][-1] - 1:
                     if N > times_dict['start_frame'][-1]+1:
                         times_dict['end_frame'][-1] = N-1
                         break
                     else:
                         times_dict['start_frame'] = times_dict['start_frame'][:-1]
                         times_dict['end_frame'] = times_dict['end_frame'][:-1]
+                
+                # Skip videos with no valid actions
+                if len(times_dict['end_frame']) == 0:
+                    print(f"WARNING: Skipping {handle} - all actions removed (video too short)")
+                    continue
 
             # add the times data dict
             datas.append(data if lazy_loading else np.load(data))

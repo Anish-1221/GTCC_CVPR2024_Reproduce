@@ -4,6 +4,8 @@ import torch.nn as nn
 import numpy as np
 from numba import jit
 import matplotlib.pyplot as plt
+from torch.utils.checkpoint import checkpoint
+import time
 
 from utils.tensorops import contains_non_float_values, get_gmm_lfbgf
 from external_util.softdtw import SoftDTW
@@ -51,108 +53,306 @@ def TCC_loss(sequences, alignment_variance=0.1, softmax_temp=1):
 def IntraContrast_loss(sequence, idx_range, window=7, margin=2):
     N = sequence.shape[0]
     DX = torch.cdist(sequence, sequence, p=2)
-    margin_identity = create_margin_identity_matrix(N, window).to(device)
-    margin_nidentity = 1 - margin_identity
+    with torch.no_grad():
+        W_matrix = torch.square(idx_range.view(-1, 1) - idx_range.view(1, -1)) + 1
+        margin_identity = create_margin_identity_matrix(N, window).to(device)
+        margin_nidentity = 1 - margin_identity
     relu = nn.ReLU()
 
-    ones = torch.ones((N, N)).to(device)
-    idx_dup = ones * idx_range
-    W_matrix = (torch.square(idx_dup - idx_dup.T) + 1)
+    # ones = torch.ones((N, N)).to(device)
+    # idx_dup = ones * idx_range
+    # W_matrix = (torch.square(idx_dup - idx_dup.T) + 1)
     outside_window = margin_nidentity * W_matrix * relu(margin - DX)
     inside_window = margin_identity * W_matrix * margin
-    return (outside_window + inside_window).sum()
+    result = (outside_window + inside_window).mean()
+    # Clean up large tensors
+    del DX, margin_identity, margin_nidentity, W_matrix, outside_window, inside_window
+    return result
 
 
+
+# def LAV_loss(sequences, min_temp=.1, cr_coefficient=0.01):
+#     loss_term = None
+#     softdtw = SoftDTW(gamma=min_temp)
+
+#     # DEBUG
+#     print(f"[LAV DEBUG] Processing {len(sequences)} sequences")
+#     for idx, seq in enumerate(sequences):
+#         print(f"  Sequence {idx}: shape {seq.shape}, device {seq.device}")
+
+#     for i, v1 in enumerate(sequences):
+#         N = v1.shape[0]
+#         idx_range_N = torch.arange(0, N, dtype=torch.float).to(device)
+#         print(f"[LAV DEBUG] Primary sequence {i}: N={N} frames")
+
+#         ###################################################
+#         ### iterate through secondary sequences
+#         for j, v2 in enumerate(sequences):
+#             if i == j: # skip if same sequence
+#                 continue
+#             M = v2.shape[0]
+#             print(f"[LAV DEBUG] Pair ({i},{j}): N={N}, M={M}")
+#             idx_range_M = torch.arange(0, M, dtype=torch.float).to(device)
+#             # soft_dtw_term = softdtw(v1, v2)
+#             try:
+#                 soft_dtw_term = softdtw(v1, v2)
+#                 print(f"[LAV DEBUG] SoftDTW done: {soft_dtw_term.item():.4f}")
+#             except RuntimeError as e:
+#                 print(f"[LAV DEBUG] SoftDTW OOM for pair ({i},{j}), N={N}, M={M}")
+#                 raise
+#             # x_cr_term = IntraContrast_loss(v1, idx_range_N, window=15)
+#             try:
+#                 x_cr_term = IntraContrast_loss(v1, idx_range_N, window=15)
+#                 print(f"[LAV DEBUG] IntraContrast v1 done: {x_cr_term.item():.4f}")
+#             except RuntimeError as e:
+#                 print(f"[LAV DEBUG] IntraContrast v1 OOM, N={N}")
+#                 raise
+#             # y_cr_term = IntraContrast_loss(v2, idx_range_M, window=15)
+#             try:
+#                 y_cr_term = IntraContrast_loss(v2, idx_range_M, window=15)
+#                 print(f"[LAV DEBUG] IntraContrast v2 done: {y_cr_term.item():.4f}")
+#             except RuntimeError as e:
+#                 print(f"[LAV DEBUG] IntraContrast v2 OOM, M={M}")
+#                 raise
+#             if loss_term is None:
+#                 loss_term = soft_dtw_term + cr_coefficient * (x_cr_term + y_cr_term)
+#             else:
+#                 loss_term += soft_dtw_term + cr_coefficient * (x_cr_term + y_cr_term)
+#     print(f"[LAV DEBUG] Final loss: {loss_term.item():.4f}")
+#     return loss_term
 
 def LAV_loss(sequences, min_temp=.1, cr_coefficient=0.01):
-    loss_term = None
+    import logging
+    logger = logging.getLogger(__name__)
+    
     softdtw = SoftDTW(gamma=min_temp)
+    loss_accumulator = []
+    pair_count = 0
+    
+    # Entry logging
+    logger.info(f"[LAV] Processing {len(sequences)} sequences")
+    for idx, seq in enumerate(sequences):
+        logger.info(f"[LAV]   Seq {idx}: shape {seq.shape}, device {seq.device}")
+    
+    total_start = time.time()
+    
     for i, v1 in enumerate(sequences):
         N = v1.shape[0]
-        idx_range_N = torch.arange(0, N, dtype=torch.float).to(device)
-        ###################################################
-        ### iterate through secondary sequences
+        with torch.no_grad():
+            idx_range_N = torch.arange(0, N, dtype=torch.float).to(device)
+        
         for j, v2 in enumerate(sequences):
-            if i == j: # skip if same sequence
+            if i == j:
                 continue
+            
+            pair_start = time.time()
             M = v2.shape[0]
-            idx_range_M = torch.arange(0, M, dtype=torch.float).to(device)
-            soft_dtw_term = softdtw(v1, v2)
-            x_cr_term = IntraContrast_loss(v1, idx_range_N, window=15)
-            y_cr_term = IntraContrast_loss(v2, idx_range_M, window=15)
-            if loss_term is None:
-                loss_term = soft_dtw_term + cr_coefficient * (x_cr_term + y_cr_term)
-            else:
-                loss_term += soft_dtw_term + cr_coefficient * (x_cr_term + y_cr_term)
+            with torch.no_grad():
+                idx_range_M = torch.arange(0, M, dtype=torch.float).to(device)
+            
+            logger.debug(f"[LAV] Pair ({i},{j}): N={N}, M={M}")
+            
+            try:
+                # SoftDTW with checkpointing
+                soft_dtw_term = checkpoint(softdtw, v1, v2, use_reentrant=False)
+                logger.debug(f"[LAV]   SoftDTW done: {soft_dtw_term.item():.4f}")
+            except RuntimeError as e:
+                logger.error(f"[LAV]   SoftDTW FAILED for pair ({i},{j}), N={N}, M={M}")
+                logger.error(f"[LAV]   Error: {str(e)[:200]}")
+                raise
+            
+            try:
+                # IntraContrast v1 with checkpointing
+                x_cr_term = checkpoint(IntraContrast_loss, v1, idx_range_N, 15, 2, use_reentrant=False)
+                logger.debug(f"[LAV]   IntraContrast v1 done: {x_cr_term.item():.4f}")
+            except RuntimeError as e:
+                logger.error(f"[LAV]   IntraContrast v1 FAILED, N={N}")
+                logger.error(f"[LAV]   Error: {str(e)[:200]}")
+                raise
+            
+            try:
+                # IntraContrast v2 with checkpointing
+                y_cr_term = checkpoint(IntraContrast_loss, v2, idx_range_M, 15, 2, use_reentrant=False)
+                logger.debug(f"[LAV]   IntraContrast v2 done: {y_cr_term.item():.4f}")
+            except RuntimeError as e:
+                logger.error(f"[LAV]   IntraContrast v2 FAILED, M={M}")
+                logger.error(f"[LAV]   Error: {str(e)[:200]}")
+                raise
+            
+            pair_loss = soft_dtw_term + cr_coefficient * (x_cr_term + y_cr_term)
+            loss_accumulator.append(pair_loss)
+            
+            pair_time = time.time() - pair_start
+            logger.debug(f"[LAV]   Pair ({i},{j}) loss: {pair_loss.item():.4f}, time: {pair_time:.2f}s")
+            
+            # Cleanup
+            del soft_dtw_term, x_cr_term, y_cr_term, pair_loss, idx_range_M
+            torch.cuda.empty_cache()
+            
+            pair_count += 1
+    
+    loss_term = sum(loss_accumulator)
+    total_time = time.time() - total_start
+    
+    logger.info(f"[LAV] Total pairs processed: {pair_count}")
+    logger.info(f"[LAV] Final loss: {loss_term.item():.4f}")
+    logger.info(f"[LAV] Total time: {total_time:.2f}s, Avg per pair: {total_time/pair_count:.2f}s")
+    
+    # Memory stats
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        logger.info(f"[LAV] Memory - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB")
+    
     return loss_term
 
 
 
 
-def VAVA_loss(sequences, maxIter=20, lambda1=1.0,lambda2=0.1, gamma=.5, zeta=0.5, delta=0.6,global_step=None):
-    loss_term = None
-    phi = max(min(0.999**(global_step + 1),0.999),0.001)
+# def VAVA_loss(sequences, maxIter=20, lambda1=1.0,lambda2=0.1, gamma=.5, zeta=0.5, delta=0.6,global_step=None):
+#     loss_term = None
+#     # phi = max(min(0.999**(global_step + 1),0.999),0.001)
+#     # FIX: Correct phi calculation (matching original TensorFlow)
+#     power = int(np.sqrt(global_step + 1.0))
+#     phi = 0.999 ** power
+#     phi = min(phi, 0.999)
+#     phi = max(phi, 0.001)
+#     lambda1_base = 1.0
+#     lambda2_base = 0.1
+#     for i, v1 in enumerate(sequences):
+#         N = v1.shape[0]
+
+#         max_comparisons = min(40, N)
+#         indices_to_check = torch.randperm(N)[:max_comparisons].to(device).sort().values
+#         ind_bool = torch.zeros(N, dtype=torch.bool).to(device)
+#         ind_bool[indices_to_check] = True
+#         idx_range_N = torch.arange(0, N+1, dtype=torch.float).to(device)
+#         ###################################################
+#         ### iterate through secondary sequences
+#         for j, v2 in enumerate(sequences):
+#             if i == j: # skip if same sequence
+#                 continue
+#             M = v2.shape[0]
+#             idx_range_M = torch.arange(0, M+1, dtype=torch.float).to(device)
+#             lambda1 = lambda1_base*(N+M)
+#             lambda2 = lambda2_base*(N*M)/4.0
+            
+#             # OT
+#             D = torch.cdist(v1, v2, p=2)
+#             D = torch.cat((torch.ones(M).to(device).detach()[None, :] * zeta, D), dim=0)
+#             D = torch.cat((torch.ones(N+1).to(device).detach()[:, None] * zeta, D), dim=1)
+#             dist, T = sink(D, reg=N, cuda=True, numItermax=maxIter)
+            
+#             lc = get_diag_consistency_matrix(N+1, M+1, idx_range_N, idx_range_M)
+#             lo = get_diag_optimality_matrix(T, N+1, M+1, idx_range_N, idx_range_M)     
+#             Pc = torch.exp(-(torch.square(lc)) / (2 * delta**2)) / delta * np.sqrt(2 * np.pi)
+#             Po = torch.exp(-(torch.square(lo)) / (2 * delta**2)) / delta * np.sqrt(2 * np.pi)
+#             P = phi * Pc + (1-phi) * Po
+
+#             # I(T)
+#             consistency_coefficients = get_consistency_matrix(N+1, M+1, idx_range_N, idx_range_M)
+#             optimality_coefficients = get_denom_diag_opt_matrix(T, N+1, M+1, idx_range_N, idx_range_M)
+#             Ic_T = torch.sum(T * consistency_coefficients)
+#             Io_T = torch.sum(T * optimality_coefficients)
+#             I_T = phi * Ic_T + (1-phi) *  Io_T
+
+#             # KL(T || P)
+#             KLT = T + 1e-5
+#             KLP= P + 1e-5
+#             KL_T_P = torch.sum(KLT * torch.log(torch.divide(KLT, KLP)))
+
+#             # C(X)
+#             C_X = IntraContrast_loss(v1, idx_range_N[:-1], window=15)
+
+#             # C(Y)
+#             C_Y = IntraContrast_loss(v2, idx_range_M[:-1], window=15)
+
+#             # C(X, Y)
+#             A = get_A(T, N+1, M+1)
+#             Abar = get_Abar(T, N+1, M+1)
+#             C_XY = torch.sum(A * D - Abar * D)
+#             vava_loss = dist - lambda1 * I_T + lambda2 * KL_T_P
+#             cr_loss = C_X + C_Y + C_XY
+
+#             if None in [loss_term]:
+#                 loss_term = vava_loss + gamma * cr_loss
+#             else: 
+#                 loss_term += vava_loss + gamma * cr_loss
+#     return loss_term
+
+def VAVA_loss(sequences, global_step, maxIter=20, zeta=0.5, delta=0.6, gamma=0.5):
+    loss_term = torch.tensor(0.0, device=device)
+    
+    # Correct phi calculation matching the GTCC/TensorFlow logic
+    # Using sqrt(step) slows decay to ensure alignment is learned before diagonal prior vanishes
+    power = int(np.sqrt(global_step + 1.0))
+    phi = 0.999 ** power
+    phi = max(min(phi, 0.999), 0.001)
+    
+    # Use BASE values to prevent compounding multiplication errors
+    lambda1_base = 1.0
+    lambda2_base = 0.1
+    
     for i, v1 in enumerate(sequences):
         N = v1.shape[0]
-
-        max_comparisons = min(40, N)
-        indices_to_check = torch.randperm(N)[:max_comparisons].to(device).sort().values
-        ind_bool = torch.zeros(N, dtype=torch.bool).to(device)
-        ind_bool[indices_to_check] = True
-        idx_range_N = torch.arange(0, N+1, dtype=torch.float).to(device)
-        ###################################################
-        ### iterate through secondary sequences
+        idx_range_N = torch.arange(0, N+1, dtype=torch.float, device=device)
+        
         for j, v2 in enumerate(sequences):
-            if i == j: # skip if same sequence
-                continue
+            if i == j: continue
             M = v2.shape[0]
-            idx_range_M = torch.arange(0, M+1, dtype=torch.float).to(device)
-            lambda1 = lambda1*(N+M)
-            lambda2 = lambda2*(N*M)/4.0
+            idx_range_M = torch.arange(0, M+1, dtype=torch.float, device=device)
             
-            # OT
+            # Scaled hyperparameters for this specific pair
+            l1 = lambda1_base * (N + M)
+            l2 = lambda2_base * (N * M) / 4.0
+            
+            # 1. Distance & Sinkhorn (Optimal Transport)
             D = torch.cdist(v1, v2, p=2)
-            D = torch.cat((torch.ones(M).to(device).detach()[None, :] * zeta, D), dim=0)
-            D = torch.cat((torch.ones(N+1).to(device).detach()[:, None] * zeta, D), dim=1)
-            dist, T = sink(D, reg=N, cuda=True, numItermax=maxIter)
+            # Add virtual bins (zeta)
+            D = torch.cat((torch.ones(M, device=device)[None, :] * zeta, D), dim=0)
+            D = torch.cat((torch.ones(N+1, device=device)[:, None] * zeta, D), dim=1)
             
+            # Note: reg must be l2 for VAVA replication
+            dist, T = sink(D, reg=l2, cuda=True, numItermax=maxIter)
+            
+            # 2. Alignment Regularization Matrices
             lc = get_diag_consistency_matrix(N+1, M+1, idx_range_N, idx_range_M)
-            lo = get_diag_optimality_matrix(T, N+1, M+1, idx_range_N, idx_range_M)     
-            Pc = torch.exp(-(torch.square(lc)) / (2 * delta**2)) / delta * np.sqrt(2 * np.pi)
-            Po = torch.exp(-(torch.square(lo)) / (2 * delta**2)) / delta * np.sqrt(2 * np.pi)
+            lo = get_diag_optimality_matrix(T, N+1, M+1, idx_range_N, idx_range_M)
+            
+            # Prior P
+            Pc = torch.exp(-(torch.square(lc)) / (2 * delta**2)) / (delta * np.sqrt(2 * np.pi))
+            Po = torch.exp(-(torch.square(lo)) / (2 * delta**2)) / (delta * np.sqrt(2 * np.pi))
             P = phi * Pc + (1-phi) * Po
 
-            # I(T)
-            consistency_coefficients = get_consistency_matrix(N+1, M+1, idx_range_N, idx_range_M)
-            optimality_coefficients = get_denom_diag_opt_matrix(T, N+1, M+1, idx_range_N, idx_range_M)
-            Ic_T = torch.sum(T * consistency_coefficients)
-            Io_T = torch.sum(T * optimality_coefficients)
-            I_T = phi * Ic_T + (1-phi) *  Io_T
+            # Information Terms I(T)
+            consistency_coeffs = get_consistency_matrix(N+1, M+1, idx_range_N, idx_range_M)
+            optimality_coeffs = get_denom_diag_opt_matrix(T, N+1, M+1, idx_range_N, idx_range_M)
+            Ic_T = torch.sum(T * consistency_coeffs)
+            Io_T = torch.sum(T * optimality_coeffs)
+            I_T = phi * Ic_T + (1-phi) * Io_T
 
-            # KL(T || P)
-            KLT = T + 1e-5
-            KLP= P + 1e-5
-            KL_T_P = torch.sum(KLT * torch.log(torch.divide(KLT, KLP)))
+            # KL Divergence
+            KL_T_P = torch.sum(T * torch.log((T + 1e-8) / (P + 1e-8)))
 
-            # C(X)
+            # 3. Normalized VAVA Core
+            # We divide by (N*M) to keep alignment loss on same scale as contrastive loss
+            vava_dis = (dist - l1 * I_T + l2 * KL_T_P) / (N * M)
+
+            # 4. Contrastive Terms
             C_X = IntraContrast_loss(v1, idx_range_N[:-1], window=15)
-
-            # C(Y)
             C_Y = IntraContrast_loss(v2, idx_range_M[:-1], window=15)
+            
+            # C(XY) is already a sum, so we average C_X and C_Y per the paper
+            cr_loss = 0.5 * (C_X + C_Y) 
 
-            # C(X, Y)
-            A = get_A(T, N+1, M+1)
-            Abar = get_Abar(T, N+1, M+1)
-            C_XY = torch.sum(A * D - Abar * D)
-            vava_loss = dist - lambda1 * I_T + lambda2 * KL_T_P
-            cr_loss = C_X + C_Y + C_XY
+            # Add to total
+            current_pair_loss = vava_dis + gamma * cr_loss
+            loss_term = loss_term + current_pair_loss
+            
+            # Clean up pair-specific tensors to prevent OOM
+            del D, T, lc, lo, Pc, Po, P, Ic_T, Io_T, I_T, KL_T_P
 
-            if None in [loss_term]:
-                loss_term = vava_loss + gamma * cr_loss
-            else: 
-                loss_term += vava_loss + gamma * cr_loss
     return loss_term
-
 
 
 def GTCC_loss(
@@ -285,13 +485,14 @@ def create_stochastic_margin_identity_matrix(size, width):
 # below function is only for IntraContrastive
 #########################################
 def create_margin_identity_matrix(size, margin):
-    # Create two identity matrices of the specified size
-    identity = torch.eye(size)
-    mask = torch.triu(torch.ones(size, size), diagonal=0)
-    mask2 = 1-torch.triu(torch.ones(size, size), diagonal=margin)
-    # Combine the identity matrix and the shifted identity to create the margin identity
-    margin_identity = margin_identity = mask2 * mask
-    return (margin_identity + (margin_identity.T - identity)).float()
+    with torch.no_grad():
+        # Create two identity matrices of the specified size
+        identity = torch.eye(size)
+        mask = torch.triu(torch.ones(size, size), diagonal=0)
+        mask2 = 1-torch.triu(torch.ones(size, size), diagonal=margin)
+        # Combine the identity matrix and the shifted identity to create the margin identity
+        margin_identity = margin_identity = mask2 * mask
+        return (margin_identity + (margin_identity.T - identity)).float()
 
 
 #########################################

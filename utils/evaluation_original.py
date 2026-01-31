@@ -222,24 +222,13 @@ class EnclosedAreaError:
 class OnlineGeoProgressError:
     def __init__(self) -> None:
         self.name = 'ogpe'
-
+    
     def __str__(self):
         return self.name
 
     def __call__(self, model, config_obj, epoch, test_dataloaders, testfolder, tasks, normalize=False, plotting=False):
-        import json
-        WHITELIST_PATH = '/vision/anishn/GTCC_CVPR2024/evaluation_video_whitelist.json'
-
         plot_folder = testfolder  + '/plotting_progress'
         validate_folder(plot_folder)
-
-        # Load whitelist for consistent evaluation
-        video_whitelist = None
-        if os.path.exists(WHITELIST_PATH):
-            with open(WHITELIST_PATH, 'r') as f:
-                data = json.load(f)
-            video_whitelist = set(data['video_names'])
-            print(f"[INFO] Test set whitelist: {len(video_whitelist)} videos")
 
         for task in tasks:
             taskplot = plot_folder + f'/{task}'
@@ -258,50 +247,40 @@ class OnlineGeoProgressError:
                 return None
 
             gpe_list = []
-            with torch.no_grad():
-                embedded_dl = flatten_dataloader_and_get_dict(model, test_dataloaders[task], config_obj.SKIP_RATE, device='cpu')
+            embedded_dl = flatten_dataloader_and_get_dict(model, test_dataloaders[task], config_obj.SKIP_RATE, device='cpu')
+            if normalize:
+                embedded_dl = svm_normalize_embedded_dl(embedded_dl=embedded_dl)
+            for i, (outputs_dict, tdict) in enumerate(embedded_dl):
+                outputs = outputs_dict['outputs']
+                tdict['end_frame'][-1] = outputs.shape[0]-1
+                true_progress = get_trueprogress(tdict)
+                pred2_progress = get_cum_matrix(outputs)
+                # pred2_progress = pred2_progress / pred2_progress.max() 
 
-                # Apply whitelist filtering
-                if video_whitelist is not None:
-                    filtered_dl = []
-                    for output_dict, tdict in embedded_dl:
-                        video_name = output_dict.get('name', '')
-                        video_name = os.path.splitext(os.path.basename(video_name))[0]
-                        if video_name in video_whitelist:
-                            filtered_dl.append((output_dict, tdict))
-                    print(f"[INFO] Using {len(filtered_dl)}/{len(embedded_dl)} whitelisted videos for {task}")
-                    embedded_dl = filtered_dl
+                if pred2_progress.sum() == 0:
+                    continue
+                pred2_progress = pred2_progress / train_cum_means[task]
+                gpe = torch.mean(torch.abs(true_progress - pred2_progress))
+                gpe_list.append(gpe.item())
 
-                if normalize:
-                    embedded_dl = svm_normalize_embedded_dl(embedded_dl=embedded_dl)
-                for i, (outputs_dict, tdict) in enumerate(embedded_dl):
-                    outputs = outputs_dict['outputs']
-                    tdict['end_frame'][-1] = outputs.shape[0]-1
-                    true_progress = get_trueprogress(tdict)
-                    pred2_progress = get_cum_matrix(outputs)
+                if plotting:
+                    plt.clf()
+                    a = true_progress.detach().cpu().numpy()
+                    b = pred2_progress.detach().cpu().numpy()
+                    plt.plot(a, color='green', label='Ground Truth Progress')
+                    plt.plot(b, color='blue', label='Online Progress Estimate')
+                    plt.fill_between(range(len(a)), a, b, color='red', alpha=0.5, label='Error')
+                    # Adjust the font size and frequency of x-axis ticks
+                    plt.xticks(np.arange(0, len(a), step=pred2_progress.shape[0] // 5), fontsize=10)
 
-                    if pred2_progress.sum() == 0:
-                        continue
-                    pred2_progress = pred2_progress / train_cum_means[task]
-                    gpe = torch.mean(torch.abs(true_progress - pred2_progress))
-                    gpe_list.append(gpe.item())
+                    # Adjust the font size of y-axis ticks
+                    plt.yticks(fontsize=10)
 
-                    if plotting:
-                        plt.clf()
-                        a = true_progress.detach().cpu().numpy()
-                        b = pred2_progress.detach().cpu().numpy()
-                        plt.plot(a, color='green', label='Ground Truth Progress')
-                        plt.plot(b, color='blue', label='Online Progress Estimate')
-                        plt.fill_between(range(len(a)), a, b, color='red', alpha=0.5, label='Error')
-                        plt.xticks(np.arange(0, len(a), step=pred2_progress.shape[0] // 5), fontsize=10)
-                        plt.yticks(fontsize=10)
-                        plt.xlabel('Time', fontsize=15)
-                        plt.ylabel('Progress', fontsize=15)
-                        name = ".".join(outputs_dict['name'].split('/')[-1].split('.')[:-1])
-                        plt.legend()
-                        plt.savefig(f'{taskplot}/{name}.pdf')
+                    # plt.title(f'{loss_plot_name} Progress Plot (EgoProcel - Making Brownies)')
+                    plt.xlabel('Time', fontsize=15)  # Adjust the font size for x-axis label
+                    plt.ylabel('Progress', fontsize=15)  # Adjust the font size for y-axis label
 
-            if not gpe_list:
-                print(f"[WARNING] No data processed for task {task}")
-                continue
+                    name = ".".join(outputs_dict['name'].split('/')[-1].split('.')[:-1])
+                    plt.legend()
+                    plt.savefig(f'{taskplot}/{name}.pdf')
             return {'task': task, 'ogpe': np.mean(gpe_list), 'CoV': train_cum_vars[task] / train_cum_means[task]}
