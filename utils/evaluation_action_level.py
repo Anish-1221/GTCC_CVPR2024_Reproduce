@@ -244,7 +244,7 @@ class OnlineGeoProgressError:
             print(f"[INFO] Test set whitelist: {len(video_whitelist)} videos")
         
         # Load action means for action-level normalization
-        # Select file based on model type (VAVA vs GTCC)
+        # Select file based on model type (VAVA vs GTCC vs TCC vs LAV)
         action_means = None
         if config_obj.LOSS_TYPE.get('VAVA', False):
             action_means_path = '/vision/anishn/GTCC_CVPR2024/vava_action_means.json'
@@ -252,6 +252,9 @@ class OnlineGeoProgressError:
         elif config_obj.LOSS_TYPE.get('tcc', False):
             action_means_path = '/vision/anishn/GTCC_CVPR2024/tcc_action_means.json'
             model_type = 'TCC'
+        elif config_obj.LOSS_TYPE.get('LAV', False):
+            action_means_path = '/vision/anishn/GTCC_CVPR2024/lav_action_means.json'
+            model_type = 'LAV'
         else:
             action_means_path = '/vision/anishn/GTCC_CVPR2024/gtcc_action_means.json'
             model_type = 'GTCC'

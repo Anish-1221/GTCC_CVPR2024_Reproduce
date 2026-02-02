@@ -175,13 +175,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 import gc
 
+# Maximum total frames per batch to prevent OOM in loss function
+# For 24GB GPU with SoftDTW (creates N×M matrices), keep total under 3500
+MAX_FRAMES_THRESHOLD = 3500
+
 def print_memory_stats(stage, local_rank=0):
-    """Print detailed memory stats"""
+    """Print memory stats at key checkpoints"""
     if local_rank == 0 and torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-        reserved = torch.cuda.memory_reserved() / 1024**3
-        max_allocated = torch.cuda.max_memory_allocated() / 1024**3
-        print(f"[MEM {stage}] Allocated: {allocated:.2f}GB | Reserved: {reserved:.2f}GB | Peak: {max_allocated:.2f}GB")
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        print(f"[MEM {stage}] Allocated: {allocated:.2f}GB")
 
 def alignment_training_loop(
         model,
@@ -263,30 +265,48 @@ def alignment_training_loop(
             total_batches += 1
             s = time.time()
             optimizer.zero_grad(set_to_none=True)
-            
-            # DEBUG: Print task info
-            if local_rank == 0:
-                logger.info(f"[BATCH {i}] Task: {task}")
-            
-            print_memory_stats(f"Batch {i} START - Task {task}", local_rank)
+
+            # Memory check at batch start
+            print_memory_stats(f"Batch {i} START", local_rank)
             torch.cuda.empty_cache()
 
             inputs, times = preprocess_batch(inputs, times, device=device if GPU_intensive else 'cpu', skip_rate=CONFIG.SKIP_RATE)
-            print_memory_stats(f"After preprocess", local_rank)
 
+            # Skip if sequences too short
             if any(seq.shape[0] < 2 for seq in inputs):
                 skipped_length += 1
-                if local_rank == 0 and i < 5:  # Log first few
-                    logger.warning(f"Skipping task {task}: Sequence length < 2 after preprocessing.")
+                if local_rank == 0 and skipped_length <= 3:
+                    logger.warning(f"[SKIP SHORT] Task: {task}")
+                del inputs
                 continue
 
-            # DEBUG: Check sequence info AFTER preprocessing
+            # Skip if total frames too large (PREVENTS OOM in loss function)
+            total_frames = sum(seq.shape[0] for seq in inputs)
+            if total_frames > MAX_FRAMES_THRESHOLD:
+                skipped_length += 1
+                if local_rank == 0:
+                    seq_lengths = [seq.shape[0] for seq in inputs]
+                    logger.warning(f"[SKIP LARGE] Task: {task}, frames={total_frames} > {MAX_FRAMES_THRESHOLD}, lengths={seq_lengths}")
+                del inputs
+                continue
+
+            # Log batch info
             if local_rank == 0:
                 seq_lengths = [seq.shape[0] for seq in inputs]
-                logger.info(f"[BATCH {i}] After preprocessing - Num sequences: {len(inputs)}, Lengths: {seq_lengths}")
+                logger.info(f"[BATCH {i}] Task: {task}, lengths={seq_lengths}, total={total_frames}")
 
-            output_dict = model(inputs)
-            print_memory_stats(f"After forward pass", local_rank)
+            try:
+                output_dict = model(inputs)
+                print_memory_stats(f"After forward pass", local_rank)
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    if local_rank == 0:
+                        logger.error(f"[OOM FORWARD] Task: {task} - skipping")
+                    del inputs
+                    torch.cuda.empty_cache()
+                    skipped_exception += 1
+                    continue
+                raise
             del inputs
 
             try:
@@ -298,15 +318,16 @@ def alignment_training_loop(
 
             except Exception as e:
                 skipped_exception += 1
-                if local_rank == 0 and skipped_exception < 5:  # Log first few
-                    logger.warning(f"Skipping batch in task {task} due to: {e}")
-                    if "out of memory" in str(e):
-                        try:
-                            logger.error(f"[OOM] Task: {task}, Sequences: {len(output_dict['outputs'])}, Lengths: {[o.shape[0] for o in output_dict['outputs']]}")
-                        except:
-                            logger.error(f"[OOM] Task: {task} (could not get sequence info)")
+                if local_rank == 0 and skipped_exception < 5:
+                    if "out of memory" in str(e).lower():
+                        logger.error(f"[OOM LOSS] Task: {task}")
+                    else:
+                        logger.warning(f"Skipping batch in task {task}: {type(e).__name__}")
+                try:
+                    del output_dict
+                except:
+                    pass
                 torch.cuda.empty_cache()
-                gc.collect()
                 continue
 
             loss = loss_dict['total_loss']
@@ -318,51 +339,46 @@ def alignment_training_loop(
             running_loss += loss.item()
             train_loss_to_plot.append(loss.item())
 
-            # DEBUG: Log loss value
             if local_rank == 0:
-                logger.info(f"[BATCH {i}] Loss value: {loss.item():.4f}")
+                logger.info(f"[BATCH {i}] Loss: {loss.item():.4f}")
 
-            print_memory_stats(f"Before backward", local_rank)
-            
-            # DEBUG: Wrap backward to catch OOM specifically here
+            # Backward pass
             try:
                 loss.backward()
-                print_memory_stats(f"After backward", local_rank)
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     if local_rank == 0:
-                        logger.error(f"[OOM in BACKWARD] Task: {task}, Loss value: {loss.item():.4f}")
-                    torch.cuda.empty_cache()
-                    gc.collect()
-                    skipped_exception += 1
+                        logger.error(f"[OOM BACKWARD] Task: {task} - skipping")
                     del loss
+                    optimizer.zero_grad(set_to_none=True)
+                    torch.cuda.empty_cache()
+                    skipped_exception += 1
                     continue
-                else:
-                    raise
-            
+                raise
+
             del loss
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=.00001, norm_type=2)
             optimizer.step()
-            # ALSO ADD: Zero gradients AFTER step
             optimizer.zero_grad(set_to_none=True)
-            print_memory_stats(f"After optimizer step", local_rank)
-            
+
+            print_memory_stats(f"After step", local_rank)
+
             time_lengs.append(time.time() - s)
             successful_batches += 1
-            
-            # DEBUG: Clear cache after successful batch
             torch.cuda.empty_cache()
         
         # Log statistics - only on rank 0
         if local_rank == 0:
-            logger.info(f"Epoch {epoch+1} stats - Total: {total_batches}, Successful: {successful_batches}, Skipped (length): {skipped_length}, Skipped (exception): {skipped_exception}")
-            
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            logger.info(f"Epoch {epoch+1} stats - Total: {total_batches}, Success: {successful_batches}, Skipped: {skipped_length}, OOM: {skipped_exception}")
+            logger.info(f"Epoch {epoch+1} complete - Final memory: {allocated:.2f}GB")
+
             avg_loss = running_loss / successful_batches if successful_batches > 0 else 0.0
             epoch_losses_to_plot.append(avg_loss)
             _simple_loss_plot(
-                epoch_losses_to_plot, 
-                plot_title='Training Loss over epochs', 
-                filename=f'{foldername}/train_loss_epochlevel.png', 
+                epoch_losses_to_plot,
+                plot_title='Training Loss over epochs',
+                filename=f'{foldername}/train_loss_epochlevel.png',
                 condition=len(epoch_losses_to_plot) > 0,
                 scatter=False
             )

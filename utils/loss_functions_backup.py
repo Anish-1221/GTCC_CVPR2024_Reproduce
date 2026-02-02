@@ -51,35 +51,22 @@ def TCC_loss(sequences, alignment_variance=0.1, softmax_temp=1):
 
 
 def IntraContrast_loss(sequence, idx_range, window=7, margin=2):
-    """
-    Intra-sequence contrastive loss for temporal smoothness.
-    Encourages nearby frames to be similar and distant frames to be different.
-
-    Memory-optimized version with explicit cleanup.
-    """
     N = sequence.shape[0]
-
-    # Distance matrix - this is the main memory consumer (N×N)
     DX = torch.cdist(sequence, sequence, p=2)
-
-    # All auxiliary matrices computed without gradients
     with torch.no_grad():
         W_matrix = torch.square(idx_range.view(-1, 1) - idx_range.view(1, -1)) + 1
         margin_identity = create_margin_identity_matrix(N, window).to(device)
         margin_nidentity = 1 - margin_identity
-
-    # Compute loss terms
     relu = nn.ReLU()
+
+    # ones = torch.ones((N, N)).to(device)
+    # idx_dup = ones * idx_range
+    # W_matrix = (torch.square(idx_dup - idx_dup.T) + 1)
     outside_window = margin_nidentity * W_matrix * relu(margin - DX)
     inside_window = margin_identity * W_matrix * margin
-
-    # Compute result
     result = (outside_window + inside_window).mean()
-
-    # Aggressive cleanup of large tensors
+    # Clean up large tensors
     del DX, margin_identity, margin_nidentity, W_matrix, outside_window, inside_window
-    torch.cuda.empty_cache()
-
     return result
 
 
@@ -135,58 +122,88 @@ def IntraContrast_loss(sequence, idx_range, window=7, margin=2):
 #     return loss_term
 
 def LAV_loss(sequences, min_temp=.1, cr_coefficient=0.01):
-    """
-    LAV (Learning by Aligning Videos) loss function.
-    Combines SoftDTW for temporal alignment with IntraContrast regularization.
-
-    Args:
-        sequences: List of tensors, each shape (seq_len, feature_dim)
-        min_temp: Temperature for SoftDTW (gamma parameter)
-        cr_coefficient: Weight for the contrastive regularization term
-    """
-    # Entry debug - useful for tracking which sequences cause issues
-    seq_lengths = [s.shape[0] for s in sequences]
-    total_frames = sum(seq_lengths)
-    print(f"[LAV] Processing {len(sequences)} sequences, lengths={seq_lengths}, total={total_frames} frames")
-
+    import logging
+    logger = logging.getLogger(__name__)
+    
     softdtw = SoftDTW(gamma=min_temp)
-    loss_term = None
-
+    loss_accumulator = []
+    pair_count = 0
+    
+    # Entry logging
+    logger.info(f"[LAV] Processing {len(sequences)} sequences")
+    for idx, seq in enumerate(sequences):
+        logger.info(f"[LAV]   Seq {idx}: shape {seq.shape}, device {seq.device}")
+    
+    total_start = time.time()
+    
     for i, v1 in enumerate(sequences):
         N = v1.shape[0]
-        idx_range_N = torch.arange(0, N, dtype=torch.float, device=v1.device).detach()
-
+        with torch.no_grad():
+            idx_range_N = torch.arange(0, N, dtype=torch.float).to(device)
+        
         for j, v2 in enumerate(sequences):
             if i == j:
                 continue
-
+            
+            pair_start = time.time()
             M = v2.shape[0]
-            idx_range_M = torch.arange(0, M, dtype=torch.float, device=v2.device).detach()
-
-            # SoftDTW alignment term (needs gradients for learning)
-            soft_dtw_term = softdtw(v1, v2)
-
-            # IntraContrast regularization (no gradients needed - just regularization)
             with torch.no_grad():
-                x_cr_term = IntraContrast_loss(v1, idx_range_N, window=15)
-                y_cr_term = IntraContrast_loss(v2, idx_range_M, window=15)
-
-            # Combine: alignment + regularization
+                idx_range_M = torch.arange(0, M, dtype=torch.float).to(device)
+            
+            logger.debug(f"[LAV] Pair ({i},{j}): N={N}, M={M}")
+            
+            try:
+                # SoftDTW with checkpointing
+                soft_dtw_term = checkpoint(softdtw, v1, v2, use_reentrant=False)
+                logger.debug(f"[LAV]   SoftDTW done: {soft_dtw_term.item():.4f}")
+            except RuntimeError as e:
+                logger.error(f"[LAV]   SoftDTW FAILED for pair ({i},{j}), N={N}, M={M}")
+                logger.error(f"[LAV]   Error: {str(e)[:200]}")
+                raise
+            
+            try:
+                # IntraContrast v1 with checkpointing
+                x_cr_term = checkpoint(IntraContrast_loss, v1, idx_range_N, 15, 2, use_reentrant=False)
+                logger.debug(f"[LAV]   IntraContrast v1 done: {x_cr_term.item():.4f}")
+            except RuntimeError as e:
+                logger.error(f"[LAV]   IntraContrast v1 FAILED, N={N}")
+                logger.error(f"[LAV]   Error: {str(e)[:200]}")
+                raise
+            
+            try:
+                # IntraContrast v2 with checkpointing
+                y_cr_term = checkpoint(IntraContrast_loss, v2, idx_range_M, 15, 2, use_reentrant=False)
+                logger.debug(f"[LAV]   IntraContrast v2 done: {y_cr_term.item():.4f}")
+            except RuntimeError as e:
+                logger.error(f"[LAV]   IntraContrast v2 FAILED, M={M}")
+                logger.error(f"[LAV]   Error: {str(e)[:200]}")
+                raise
+            
             pair_loss = soft_dtw_term + cr_coefficient * (x_cr_term + y_cr_term)
-
-            if loss_term is None:
-                loss_term = pair_loss
-            else:
-                loss_term = loss_term + pair_loss
-
-            # Cleanup after each pair
-            del idx_range_M, soft_dtw_term, x_cr_term, y_cr_term, pair_loss
+            loss_accumulator.append(pair_loss)
+            
+            pair_time = time.time() - pair_start
+            logger.debug(f"[LAV]   Pair ({i},{j}) loss: {pair_loss.item():.4f}, time: {pair_time:.2f}s")
+            
+            # Cleanup
+            del soft_dtw_term, x_cr_term, y_cr_term, pair_loss, idx_range_M
             torch.cuda.empty_cache()
-
-        del idx_range_N
-
-    # Exit debug
-    print(f"[LAV] Complete, loss={loss_term.item():.4f}")
+            
+            pair_count += 1
+    
+    loss_term = sum(loss_accumulator)
+    total_time = time.time() - total_start
+    
+    logger.info(f"[LAV] Total pairs processed: {pair_count}")
+    logger.info(f"[LAV] Final loss: {loss_term.item():.4f}")
+    logger.info(f"[LAV] Total time: {total_time:.2f}s, Avg per pair: {total_time/pair_count:.2f}s")
+    
+    # Memory stats
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        logger.info(f"[LAV] Memory - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB")
+    
     return loss_term
 
 
