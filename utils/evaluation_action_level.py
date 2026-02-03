@@ -344,10 +344,18 @@ class OnlineGeoProgressError:
                 video_name = os.path.splitext(os.path.basename(video_name))[0]
                 
                 # Read ground truth from .txt file (action names, not IDs)
-                video_subset = 'egoprocel_subset1_S'  # GTCC trained on subset1_S
-                gt_path = f'{PROTAS_BASE}/{video_subset}/groundTruth/{video_name}.txt'
-                
-                if not os.path.exists(gt_path):
+                # Search ALL 5 subsets to find the video's ground truth
+                SUBSETS = ['egoprocel_subset1_S', 'egoprocel_subset2_OP_P', 'egoprocel_subset3_tent',
+                           'egoprocel_subset4_numbers', 'egoprocel_subset5_head']
+
+                gt_path = None
+                for subset in SUBSETS:
+                    potential_path = f'{PROTAS_BASE}/{subset}/groundTruth/{video_name}.txt'
+                    if os.path.exists(potential_path):
+                        gt_path = potential_path
+                        break
+
+                if gt_path is None:
                     print(f"[WARNING] No ground truth found for {video_name}, skipping")
                     continue
                 

@@ -217,7 +217,7 @@ import torch
 from utils.ckpt_save import get_ckpt_for_eval
 from utils.os_util import get_env_variable
 from models.json_dataset import data_json_labels_handles
-from utils.evaluation import (
+from utils.evaluation_action_level import (
     PhaseProgression,
     PhaseClassification,
     KendallsTau,
