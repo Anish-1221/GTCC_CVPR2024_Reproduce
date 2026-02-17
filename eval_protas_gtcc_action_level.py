@@ -30,36 +30,36 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Paths
 WHITELIST_PATH = '/vision/anishn/GTCC_CVPR2024/evaluation_video_whitelist.json'
 EGOPROCEL_JSON_PATH = '/vision/anishn/GTCC_CVPR2024/dset_jsons/egoprocel.json'
-PROTAS_BASE = '/vision/anishn/ProTAS/data_1fps/'
-OUTPUT_FOLDER = '/vision/anishn/GTCC_CVPR2024/output/multi-task-setting/protas_eval_egoprocel_act_level_2'
+PROTAS_BASE = '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/'
+OUTPUT_FOLDER = '/vision/anishn/GTCC_CVPR2024/Output_gtcc_protas'
 
 # Per-subset configuration
 # Each subset has different num_classes and its own trained model
 SUBSET_CONFIGS = {
     'egoprocel_subset1_S': {
         'num_classes': 30,
-        'model_path': '/u/anishn/models/egoprocel_subset1_S_1fps/egoprocel_subset1_S/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset1_S/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset1_S/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset1_S/graph/graph.pkl',
     },
     'egoprocel_subset2_OP_P': {
         'num_classes': 50,
-        'model_path': '/u/anishn/models/egoprocel_subset2_OP_P_1fps/egoprocel_subset2_OP_P/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset2_OP_P/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset2_OP_P/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset2_OP_P/graph/graph.pkl',
     },
     'egoprocel_subset3_tent': {
         'num_classes': 12,
-        'model_path': '/u/anishn/models/egoprocel_subset3_tent_1fps/egoprocel_subset3_tent/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset3_tent/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset3_tent/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset3_tent/graph/graph.pkl',
     },
     'egoprocel_subset4_numbers': {
         'num_classes': 18,
-        'model_path': '/u/anishn/models/egoprocel_subset4_numbers_1fps/egoprocel_subset4_numbers/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset4_numbers/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset4_numbers/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset4_numbers/graph/graph.pkl',
     },
     'egoprocel_subset5_head': {
         'num_classes': 19,
-        'model_path': '/u/anishn/models/egoprocel_subset5_head_1fps/egoprocel_subset5_head/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset5_head/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset5_head/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset5_head/graph/graph.pkl',
     },
 }
 
@@ -68,7 +68,7 @@ COMMON_PROTAS_PARAMS = {
     'num_stages': 4,
     'num_layers': 10,
     'num_f_maps': 64,
-    'dim': 2048,
+    'dim': 128,  # GTCC-aligned features are 128-d
     'causal': True,
     'use_graph': True,
     'learnable': True,

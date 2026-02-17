@@ -1,2 +1,5 @@
 # Training outputs / checkpoints
 output/
+output_4fps
+output_batch
+Output_gtcc_protas

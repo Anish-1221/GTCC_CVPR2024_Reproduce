@@ -175,9 +175,20 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 import gc
 
-# Maximum total frames per batch to prevent OOM in loss function
-# For 24GB GPU with SoftDTW (creates N×M matrices), keep total under 3500
-MAX_FRAMES_THRESHOLD = 3500
+# Method-specific maximum pairwise products to prevent OOM in loss function
+# Loss functions compute pairwise distance matrices between all video pairs
+# Memory scales with max(Li × Lj), not sum of frames
+# LAV uses SoftDTW which requires ~2-3x more memory than TCC/VAVA due to:
+#   - Full (N+2)×(M+2) DP table allocation
+#   - Intermediate R matrices stored for backward pass
+#   - Additional N×N and M×M matrices for IntraContrast
+MAX_PAIRWISE_THRESHOLDS = {
+    'LAV': 4_000_000,       # LAV uses more memory due to SoftDTW
+    'GTCC': 8_000_000,      # ~8M pairwise products max for 22.5GB GPU at 4fps
+    'tcc': 8_000_000,       # Same as GTCC
+    'VAVA': 6_000_000,      # VAVA uses moderate extra memory for OT
+    'default': 8_000_000,   # Default threshold
+}
 
 def print_memory_stats(stage, local_rank=0):
     """Print memory stats at key checkpoints"""
@@ -194,7 +205,8 @@ def alignment_training_loop(
         GPU_intensive=False,
         test_dl_dict=None,
         local_rank=0,
-        train_samplers=None
+        train_samplers=None,
+        loss_type=None
     ):
     """this takes the config for model training and executes the training job
 
@@ -273,27 +285,43 @@ def alignment_training_loop(
             inputs, times = preprocess_batch(inputs, times, device=device if GPU_intensive else 'cpu', skip_rate=CONFIG.SKIP_RATE)
 
             # Skip if sequences too short
-            if any(seq.shape[0] < 2 for seq in inputs):
+            # [4FPS FIX] Increased minimum from 2 to 10 frames to avoid numerical issues
+            # Videos with only 2-9 frames cause alignment loss to be ~0, leading to NaN/Inf
+            MIN_SEQ_LENGTH = 10
+            if any(seq.shape[0] < MIN_SEQ_LENGTH for seq in inputs):
                 skipped_length += 1
                 if local_rank == 0 and skipped_length <= 3:
-                    logger.warning(f"[SKIP SHORT] Task: {task}")
+                    logger.warning(f"[SKIP SHORT] Task: {task}, lengths={[seq.shape[0] for seq in inputs]}")
                 del inputs
                 continue
 
-            # Skip if total frames too large (PREVENTS OOM in loss function)
-            total_frames = sum(seq.shape[0] for seq in inputs)
-            if total_frames > MAX_FRAMES_THRESHOLD:
+            # Skip if max pairwise product too large (PREVENTS OOM in loss function)
+            # Loss functions compute N×M matrices for each video pair
+            # Memory scales with the largest pairwise product, not sum of frames
+            seq_lengths = sorted([seq.shape[0] for seq in inputs], reverse=True)
+            # Max pairwise is the product of the two longest videos
+            if len(seq_lengths) >= 2:
+                max_pairwise = seq_lengths[0] * seq_lengths[1]
+            else:
+                max_pairwise = seq_lengths[0] ** 2
+
+            # Use method-specific threshold (LAV needs stricter limit due to SoftDTW memory)
+            max_pairwise_threshold = MAX_PAIRWISE_THRESHOLDS.get(loss_type, MAX_PAIRWISE_THRESHOLDS['default'])
+
+            if max_pairwise > max_pairwise_threshold:
                 skipped_length += 1
                 if local_rank == 0:
-                    seq_lengths = [seq.shape[0] for seq in inputs]
-                    logger.warning(f"[SKIP LARGE] Task: {task}, frames={total_frames} > {MAX_FRAMES_THRESHOLD}, lengths={seq_lengths}")
+                    logger.warning(
+                        f"[SKIP LARGE] Task: {task}, max_pairwise={max_pairwise:,} > {max_pairwise_threshold:,} ({loss_type}), "
+                        f"lengths={seq_lengths}"
+                    )
                 del inputs
                 continue
 
             # Log batch info
+            total_frames = sum(seq_lengths)
             if local_rank == 0:
-                seq_lengths = [seq.shape[0] for seq in inputs]
-                logger.info(f"[BATCH {i}] Task: {task}, lengths={seq_lengths}, total={total_frames}")
+                logger.info(f"[BATCH {i}] Task: {task}, lengths={seq_lengths}, total={total_frames}, max_pairwise={max_pairwise:,}")
 
             try:
                 output_dict = model(inputs)
@@ -303,7 +331,9 @@ def alignment_training_loop(
                     if local_rank == 0:
                         logger.error(f"[OOM FORWARD] Task: {task} - skipping")
                     del inputs
+                    gc.collect()
                     torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
                     skipped_exception += 1
                     continue
                 raise
@@ -327,7 +357,9 @@ def alignment_training_loop(
                     del output_dict
                 except:
                     pass
+                gc.collect()
                 torch.cuda.empty_cache()
+                torch.cuda.synchronize()
                 continue
 
             loss = loss_dict['total_loss']
@@ -350,8 +382,10 @@ def alignment_training_loop(
                     if local_rank == 0:
                         logger.error(f"[OOM BACKWARD] Task: {task} - skipping")
                     del loss
+                    gc.collect()
                     optimizer.zero_grad(set_to_none=True)
                     torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
                     skipped_exception += 1
                     continue
                 raise

@@ -224,7 +224,7 @@ def get_all_goal_states_2d(XX):
 
 def validate_folder(folder):
     if not os.path.isdir(folder):
-        os.makedirs(folder)
+        os.makedirs(folder, exist_ok=True)  # exist_ok=True handles DDP race conditions
 
 
 def plot_model_tsne(model, dataloader, filepath, task, drop=False):

@@ -1,8 +1,8 @@
 """
-Action-Level OGPE Evaluation for ProTAS Model
+Video-Level OGPE Evaluation for ProTAS Model
 
-Uses get_trueprogress_per_action() from utils.tensorops for action-level
-progress (each action goes 0->1 independently).
+Uses the EXACT same get_trueprogress() function from utils.tensorops
+to ensure consistency with GTCC/VAVA/TCC/LAV evaluation.
 
 Results are saved PER TASK (Brownie.cmu, Eggs.cmu, etc.) to match
 the GTCC output format exactly.
@@ -20,8 +20,8 @@ import pandas as pd
 import torch
 
 from models.protas_model import MultiStageModel
-# Import action-level progress function for action-level evaluation
-from utils.tensorops import get_trueprogress_per_action
+# Import the EXACT same function used in evaluation.py
+from utils.tensorops import get_trueprogress
 from utils.logging import configure_logging_format
 
 logger = configure_logging_format()
@@ -30,36 +30,36 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Paths
 WHITELIST_PATH = '/vision/anishn/GTCC_CVPR2024/evaluation_video_whitelist.json'
 EGOPROCEL_JSON_PATH = '/vision/anishn/GTCC_CVPR2024/dset_jsons/egoprocel.json'
-PROTAS_BASE = '/vision/anishn/ProTAS/data_1fps/'
-OUTPUT_FOLDER = '/vision/anishn/GTCC_CVPR2024/output/multi-task-setting/protas_eval_egoprocel_act_level_2'
+PROTAS_BASE = '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/'
+OUTPUT_FOLDER = '/vision/anishn/GTCC_CVPR2024/Output_gtcc_protas'
 
 # Per-subset configuration
 # Each subset has different num_classes and its own trained model
 SUBSET_CONFIGS = {
     'egoprocel_subset1_S': {
         'num_classes': 30,
-        'model_path': '/u/anishn/models/egoprocel_subset1_S_1fps/egoprocel_subset1_S/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset1_S/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset1_S/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset1_S/graph/graph.pkl',
     },
     'egoprocel_subset2_OP_P': {
         'num_classes': 50,
-        'model_path': '/u/anishn/models/egoprocel_subset2_OP_P_1fps/egoprocel_subset2_OP_P/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset2_OP_P/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset2_OP_P/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset2_OP_P/graph/graph.pkl',
     },
     'egoprocel_subset3_tent': {
         'num_classes': 12,
-        'model_path': '/u/anishn/models/egoprocel_subset3_tent_1fps/egoprocel_subset3_tent/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset3_tent/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset3_tent/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset3_tent/graph/graph.pkl',
     },
     'egoprocel_subset4_numbers': {
         'num_classes': 18,
-        'model_path': '/u/anishn/models/egoprocel_subset4_numbers_1fps/egoprocel_subset4_numbers/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset4_numbers/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset4_numbers/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset4_numbers/graph/graph.pkl',
     },
     'egoprocel_subset5_head': {
         'num_classes': 19,
-        'model_path': '/u/anishn/models/egoprocel_subset5_head_1fps/egoprocel_subset5_head/split_1/epoch-50.model',
-        'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset5_head/graph/graph.pkl',
+        'model_path': '/u/anishn/models/protas_gtcc_aligned_128d/egoprocel_subset5_head/split_1/epoch-50.model',
+        'graph_path': '/vision/anishn/ProTAS/data_1fps_gtcc_aligned/egoprocel_subset5_head/graph/graph.pkl',
     },
 }
 
@@ -68,7 +68,7 @@ COMMON_PROTAS_PARAMS = {
     'num_stages': 4,
     'num_layers': 10,
     'num_f_maps': 64,
-    'dim': 2048,
+    'dim': 128,  # GTCC-aligned features are 128-d
     'causal': True,
     'use_graph': True,
     'learnable': True,
@@ -253,19 +253,11 @@ def evaluate_single_video(video_name, subset_name, gt_path):
         # Clamp to [0, 1] range
         pred_progress = torch.clamp(pred_progress, 0, 1)
 
-        # Get ground truth progress (action-level: each action goes 0->1 independently)
-        true_progress = get_trueprogress_per_action(tdict).to(device)
+        # Get ground truth progress using EXACT same function as evaluation.py
+        true_progress = get_trueprogress(tdict).to(device)
 
-        # Create mask to exclude background frames (only evaluate on action frames)
-        action_mask = torch.tensor([label != 'background' for label in action_names_per_frame],
-                                   dtype=torch.bool, device=device)
-
-        # OGPE calculation - ONLY on action frames (exclude background)
-        if action_mask.any():
-            errors = torch.abs(true_progress - pred_progress)
-            gpe = errors[action_mask].mean()
-        else:
-            gpe = torch.tensor(0.0)  # No action frames
+        # OGPE calculation - EXACT same formula as evaluation.py line 286
+        gpe = torch.mean(torch.abs(true_progress - pred_progress))
         return gpe.item()
 
     except Exception as e:
@@ -277,7 +269,7 @@ def evaluate_single_video(video_name, subset_name, gt_path):
 
 def main():
     logger.info("=" * 60)
-    logger.info("Action-Level OGPE Evaluation for ProTAS")
+    logger.info("Video-Level OGPE Evaluation for ProTAS")
     logger.info("Results organized by TASK (matching GTCC format)")
     logger.info("=" * 60)
 
@@ -387,7 +379,7 @@ def main():
         logger.info(f"\nMean OGPE across tasks: {mean_ogpe:.4f}")
 
     # Save results
-    eval_folder = f'{OUTPUT_FOLDER}/EVAL/ProTAS_ActionLevel'
+    eval_folder = f'{OUTPUT_FOLDER}/EVAL/ProTAS_VideoLevel'
     os.makedirs(eval_folder, exist_ok=True)
 
     # Save in same CSV format as GTCC evaluation.py

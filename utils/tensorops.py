@@ -317,7 +317,7 @@ def get_trueprogress_per_action(time_dict):
     for step, start, end in zip(time_dict['step'], time_dict['start_frame'], time_dict['end_frame']):
         if step not in ['SIL', 'background']:
             segment_length = end - start + 1
-            progress[start:end+1] = torch.linspace(0, 1, segment_length)
+            progress[start:end+1] = torch.arange(1, segment_length + 1, dtype=torch.float) / segment_length
         else:
             progress[start:end+1] = 0
     

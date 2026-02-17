@@ -208,6 +208,7 @@
 import glob
 import copy
 import argparse
+import sys
 
 import pandas as pd
 from models.json_dataset import get_test_dataloaders
@@ -217,14 +218,38 @@ import torch
 from utils.ckpt_save import get_ckpt_for_eval
 from utils.os_util import get_env_variable
 from models.json_dataset import data_json_labels_handles
-from utils.evaluation_action_level import (
-    PhaseProgression,
-    PhaseClassification,
-    KendallsTau,
-    WildKendallsTau,
-    EnclosedAreaError,
-    OnlineGeoProgressError
-)
+
+# [4FPS MODIFICATION] Added --level argument to switch between video-level and action-level evaluation
+# Parse args early to determine which evaluation module to import
+# This is needed because the import must happen before we use the evaluation classes
+_temp_parser = argparse.ArgumentParser(add_help=False)
+_temp_parser.add_argument('--level', choices=['video', 'action'], default='action')
+_temp_args, _ = _temp_parser.parse_known_args()
+
+# [4FPS MODIFICATION] Conditional import based on --level argument
+# video: uses utils.evaluation (progress 0->1 across entire video)
+# action: uses utils.evaluation_action_level (progress 0->1 per action segment)
+if _temp_args.level == 'video':
+    from utils.evaluation import (
+        PhaseProgression,
+        PhaseClassification,
+        KendallsTau,
+        WildKendallsTau,
+        EnclosedAreaError,
+        OnlineGeoProgressError
+    )
+    EVAL_LEVEL = 'video'
+else:
+    from utils.evaluation_action_level import (
+        PhaseProgression,
+        PhaseClassification,
+        KendallsTau,
+        WildKendallsTau,
+        EnclosedAreaError,
+        OnlineGeoProgressError
+    )
+    EVAL_LEVEL = 'action'
+
 from utils.plotter import validate_folder
 from utils.logging import configure_logging_format
 from utils.train_util import get_config_for_folder
@@ -247,11 +272,13 @@ def update_json_dict_and_save(ckpt_out_folder, test_object, historical_json, upd
             json_to_save[k].append(np.mean(json_to_save[k]) if None not in json_to_save[k] else None)
     pd.DataFrame(json_to_save).to_csv(f'{ckpt_out_folder}/{test_object}.csv')
 
-def begin_eval_loop_over_tasks(config, folder_to_test, tests_to_run, tasks, test_tasks, test_dl_dict):
+def begin_eval_loop_over_tasks(config, folder_to_test, tests_to_run, tasks, test_tasks, test_dl_dict, eval_level='action'):
     ##########################################
     # for each ckpt in this folder....
     ##########################################
-    out_folder = f'{folder_to_test}/EVAL'
+    # [4FPS MODIFICATION] Output folder now includes evaluation level suffix
+    # This prevents video_level and action_level results from overwriting each other
+    out_folder = f'{folder_to_test}/EVAL_{eval_level}_level'
     validate_folder(out_folder)
     json_test_result = {test_object.name: None for test_object in tests_to_run}
 
@@ -313,7 +340,12 @@ if __name__ == '__main__':
     ##########################################
     # quick parser code to specify folder to test.
     parser = argparse.ArgumentParser(description='Please specify the parameters of the experiment.')
-    parser.add_argument('-f', '--folder', required=True) 
+    parser.add_argument('-f', '--folder', required=True)
+    # [4FPS MODIFICATION] Added --level argument to switch between evaluation modes
+    # video: progress 0->1 across entire video (uses utils.evaluation)
+    # action: progress 0->1 per action segment (uses utils.evaluation_action_level)
+    parser.add_argument('--level', choices=['video', 'action'], default='action',
+                        help='Evaluation level: video (0->1 per video) or action (0->1 per action segment)')
     args = parser.parse_args()
 
     tests_to_run = {
@@ -353,15 +385,19 @@ if __name__ == '__main__':
     ##########################################
     logger.info(f'Model architecture is {config.BASEARCH.ARCHITECTURE}')
     logger.info(f'Dataset is {config.DATASET_NAME}')
+    # [4FPS MODIFICATION] Log the evaluation level being used
+    logger.info(f'Evaluation level is {EVAL_LEVEL}_level')
     logger.info(f'Test deck is {tests_to_run}')
     logger.info(f'Folder to run is {folder_to_test}')
     logger.info(f'tasks are {TASKS}')
  
+    # [4FPS MODIFICATION] Pass eval_level to output to separate folders
     begin_eval_loop_over_tasks(
         config,
         folder_to_test,
         tests_to_run,
         TASKS,
         testTASKS,
-        test_dataloaders
+        test_dataloaders,
+        eval_level=EVAL_LEVEL  # 'video' or 'action' based on --level argument
     )

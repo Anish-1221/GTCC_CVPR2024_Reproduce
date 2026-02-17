@@ -402,9 +402,21 @@ class OnlineGeoProgressError:
                             if train_cum_means[task] > 0:
                                 pred2_progress[start:end+1] = segment_cum / train_cum_means[task]
                     # else: background stays at 0
-                
-                # Calculate action-level progress error
-                gpe = torch.mean(torch.abs(true_progress - pred2_progress))
+
+                # Create mask to exclude background/SIL frames (only evaluate on action frames)
+                action_mask = torch.zeros(len(true_progress), dtype=torch.bool)
+                for seg in segments:
+                    if seg['name'] not in ['SIL', 'background']:
+                        seg_start = max(0, min(seg['start'], len(true_progress)-1))
+                        seg_end = max(0, min(seg['end'], len(true_progress)-1))
+                        action_mask[seg_start:seg_end+1] = True
+
+                # Calculate action-level progress error - ONLY on action frames
+                if action_mask.any():
+                    errors = torch.abs(true_progress - pred2_progress)
+                    gpe = errors[action_mask].mean()
+                else:
+                    gpe = torch.tensor(0.0)
                 gpe_list.append(gpe.item())
                 
                 if plotting:

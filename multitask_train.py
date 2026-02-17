@@ -8,6 +8,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
 from utils.os_util import get_env_variable
+from utils.repeating_distributed_sampler import RepeatingDistributedSampler
 from utils.loss_entry import get_loss_function
 from utils.logging import configure_logging_format
 from utils.plotter import validate_folder
@@ -105,19 +106,53 @@ if __name__ == '__main__':
         )
 
         if use_ddp:
-            train_sampler = DistributedSampler(
+            # Use RepeatingDistributedSampler to handle small datasets
+            # This ensures tasks with fewer videos than batch_size*world_size still train
+            train_sampler = RepeatingDistributedSampler(
                 train_set,
+                batch_size=CFG.BATCH_SIZE,
                 num_replicas=world_size,
                 rank=local_rank,
                 shuffle=True,
-                seed=42
+                seed=42,
+                drop_last=True
             )
+
+            # Log warning if repetition is needed (only on rank 0)
+            if local_rank == 0:
+                info = train_sampler.get_repeat_info()
+                if info['needs_repetition']:
+                    logger.warning(
+                        f"Task '{task}': Small dataset ({info['original_dataset_size']} videos) "
+                        f"repeated {info['repeat_factor']}x to ensure training batches. "
+                        f"Each GPU gets {info['samples_per_gpu']} samples "
+                        f"({info['batches_per_gpu']} batches of {info['batch_size']})."
+                    )
 
             train_samplers[task] = train_sampler
             train_dataloaders[task] = DataLoader(train_set, batch_size=CFG.BATCH_SIZE, sampler=train_sampler, collate_fn=jsondataset_collate_fn, drop_last=True, shuffle=False, num_workers=4, pin_memory=True)
-        
+
         else:
-            train_dataloaders[task] = DataLoader(train_set, batch_size=CFG.BATCH_SIZE, collate_fn=jsondataset_collate_fn, drop_last=True, shuffle=True)
+            # Single GPU mode - also handle small datasets
+            if len(train_set) < CFG.BATCH_SIZE:
+                # Use RepeatingDistributedSampler with num_replicas=1 for single GPU
+                train_sampler = RepeatingDistributedSampler(
+                    train_set,
+                    batch_size=CFG.BATCH_SIZE,
+                    num_replicas=1,
+                    rank=0,
+                    shuffle=True,
+                    seed=42,
+                    drop_last=True
+                )
+                info = train_sampler.get_repeat_info()
+                logger.warning(
+                    f"Task '{task}': Small dataset ({info['original_dataset_size']} videos) "
+                    f"repeated {info['repeat_factor']}x to ensure training batches."
+                )
+                train_dataloaders[task] = DataLoader(train_set, batch_size=CFG.BATCH_SIZE, sampler=train_sampler, collate_fn=jsondataset_collate_fn, drop_last=True, shuffle=False)
+            else:
+                train_dataloaders[task] = DataLoader(train_set, batch_size=CFG.BATCH_SIZE, collate_fn=jsondataset_collate_fn, drop_last=True, shuffle=True)
 
         if local_rank == 0:
             logger.debug(f'{len(train_dataloaders[task].dataset)} in train set for {task}')
@@ -147,6 +182,13 @@ if __name__ == '__main__':
         model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
 
 
+    # Determine loss type from config for method-specific memory thresholds
+    loss_type = None
+    for lt, enabled in CFG.LOSS_TYPE.items():
+        if enabled:
+            loss_type = lt
+            break
+
     alignment_training_loop(
         model,
         train_dataloaders,
@@ -154,7 +196,8 @@ if __name__ == '__main__':
         master_experiment_foldername,
         CONFIG=CFG,
         local_rank=local_rank,
-        train_samplers=train_samplers
+        train_samplers=train_samplers,
+        loss_type=loss_type
     )
 
     # Cleanup
