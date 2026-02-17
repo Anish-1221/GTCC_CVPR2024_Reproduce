@@ -12,7 +12,7 @@ from utils.logging import configure_logging_format
 logger = configure_logging_format()
 
 # --- CONFIGURATION (4 FPS VERSION) ---
-EXP_FOLDER = '/vision/anishn/GTCC_CVPR2024/output_4fps/multi-task-setting/V1___GTCC_egoprocel.4fps'
+EXP_FOLDER = '/vision/anishn/GTCC_CVPR2024/output_4fps_val/multi-task-setting/V1___GTCC_egoprocel.4fps'
 INPUT_FEAT_DIR = '/vision/anishn/GTCC_Data_Processed_4fps/egoprocel/frames/'
 OUTPUT_DIR = '/vision/anishn/GTCC_Data_Processed_4fps/egoprocel/aligned_features/'
 
@@ -25,17 +25,20 @@ def initialize_model(device):
     logger.info(f"[DEBUG] Config ARCHITECTURE: {config.ARCHITECTURE}")
     logger.info(f"[DEBUG] Config LOSS_TYPE: {config.LOSS_TYPE}")
     
-    # CRITICAL FIX: The checkpoint path had an absolute path issue
-    ckpt_path = os.path.join(EXP_FOLDER, 'ckpt', 'epoch-50.pt')
-    
+    # First try best_model.pt (from validation-based training)
+    ckpt_path = os.path.join(EXP_FOLDER, 'ckpt', 'best_model.pt')
+
     if not os.path.exists(ckpt_path):
-        # Fallback: find latest checkpoint
-        logger.warning(f"[WARNING] {ckpt_path} not found, searching for any checkpoint...")
-        ckpt_files = sorted(glob.glob(os.path.join(EXP_FOLDER, 'ckpt', 'epoch-*.pt')))
-        if not ckpt_files:
-            raise FileNotFoundError(f"No checkpoints found in {EXP_FOLDER}/ckpt/")
-        ckpt_path = ckpt_files[-1]
-        logger.info(f"[INFO] Using checkpoint: {ckpt_path}")
+        # Fallback to epoch-50.pt
+        ckpt_path = os.path.join(EXP_FOLDER, 'ckpt', 'epoch-50.pt')
+        if not os.path.exists(ckpt_path):
+            # Final fallback: find any epoch checkpoint
+            logger.warning(f"[WARNING] No checkpoint found, searching for any...")
+            ckpt_files = sorted(glob.glob(os.path.join(EXP_FOLDER, 'ckpt', 'epoch-*.pt')))
+            if not ckpt_files:
+                raise FileNotFoundError(f"No checkpoints found in {EXP_FOLDER}/ckpt/")
+            ckpt_path = ckpt_files[-1]
+    logger.info(f"[INFO] Using checkpoint: {ckpt_path}")
     
     logger.info(f"[2/4] Loading checkpoint from {ckpt_path}")
     

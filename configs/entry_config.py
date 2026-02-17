@@ -77,11 +77,10 @@ def get_generic_config(multi_task_setting=False, delta=None, n_components=None):
         CONFIG.BASEARCH.TEMPORAL_STACKING_ARCH['dropping'] = True
         CONFIG.BASEARCH.TEMPORAL_STACKING_ARCH['output_dimensions'] = int(output_dimensions)
 
-    # set split based on dataset
-    if dataset in ['coin', 'egoprocel', 'cmu', 'egtea']:
-        CONFIG.TRAIN_SPLIT = [.65, .5]
-    else:
-        CONFIG.TRAIN_SPLIT = [.75, .5]
+    # Set split ratios (75% train, 10% val, 15% test)
+    # NOTE: Actual splits are now loaded from data_splits.json for deterministic,
+    # stratified train/val/test splits. These values are for documentation only.
+    CONFIG.TRAIN_SPLIT = [.75, .10, .15]
 
     # int values for training
     CONFIG.LEARNING_RATE = float(lr)

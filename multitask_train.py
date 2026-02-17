@@ -18,7 +18,8 @@ from utils.train_util import (
     save_dict_to_json_file
 )
 from utils.collate_functions import jsondataset_collate_fn
-from models.json_dataset import jsondataset_get_train_test, data_json_labels_handles
+from utils.data_splits import load_splits_from_json
+from models.json_dataset import jsondataset_get_train_test, jsondataset_from_splits, data_json_labels_handles
 from models.alignment_training_loop import alignment_training_loop
 from models.model_multiprong import MultiProngAttDropoutModel
 from configs.entry_config import get_generic_config
@@ -68,19 +69,25 @@ if __name__ == '__main__':
     # get configuration for this experiment
     CFG = get_generic_config(multi_task_setting=True)
 
+    # Use output_val folder to preserve existing models in output folder
+    output_folder = CFG.EVAL_PLOTFOLDER.replace('/output/', '/output_val/')
+    if '/output/' not in CFG.EVAL_PLOTFOLDER:
+        # Fallback if the path doesn't contain /output/
+        output_folder = CFG.EVAL_PLOTFOLDER + '_val'
+
     if local_rank == 0:
         # initialize folder for logging output
-        master_experiment_foldername = CFG.EVAL_PLOTFOLDER + f'/{CFG.EXPERIMENTNAME}'
+        master_experiment_foldername = output_folder + f'/{CFG.EXPERIMENTNAME}'
         validate_folder(master_experiment_foldername)
         save_dict_to_json_file(CFG, master_experiment_foldername + '/config.json')
 
     # Broadcast folder name in DDP mode
     if use_ddp:
-        folder_list = [CFG.EVAL_PLOTFOLDER + f'/{CFG.EXPERIMENTNAME}'] if local_rank == 0 else [None]
+        folder_list = [output_folder + f'/{CFG.EXPERIMENTNAME}'] if local_rank == 0 else [None]
         dist.broadcast_object_list(folder_list, src=0)
         master_experiment_foldername = folder_list[0]
     else:
-        master_experiment_foldername = CFG.EVAL_PLOTFOLDER + f'/{CFG.EXPERIMENTNAME}'
+        master_experiment_foldername = output_folder + f'/{CFG.EXPERIMENTNAME}'
 
     # dataset structure json, get DSET variables
     data_structure = data_json_labels_handles(dset_json_folder, dset_name=CFG.DATASET_NAME)
@@ -88,20 +95,38 @@ if __name__ == '__main__':
     data_subfolder_name, datafile_extension = get_data_subfolder_and_extension(architecture=CFG.BASEARCH.ARCHITECTURE)
     data_folder = f'{CFG.DATAFOLDER}/{data_subfolder_name}'
 
+    # Load pre-defined stratified splits (75% train, 10% val, 15% test)
+    splits_file = '/vision/anishn/GTCC_CVPR2024/data_splits.json'
+    splits_dict = load_splits_from_json(splits_file)
+    if local_rank == 0:
+        logger.info(f"Loaded splits from {splits_file}")
 
     train_dataloaders = {}
+    val_dataloaders = {}
     train_samplers = {} if use_ddp else None
 
     for task in TASKS:
         batch_size = CFG.BATCH_SIZE
-        train_set, test_set = jsondataset_get_train_test(
+
+        # Create train set from pre-defined splits
+        train_set = jsondataset_from_splits(
             task=task,
             task_json=data_structure[task],
             data_folder=data_folder,
-            device=device,
-            split=CFG.TRAIN_SPLIT[0],
+            splits_dict=splits_dict,
+            split_type='train',
             extension=datafile_extension,
-            data_size=CFG.DATA_SIZE,
+            lazy_loading=CFG.LAZY_LOAD
+        )
+
+        # Create validation set from pre-defined splits
+        val_set = jsondataset_from_splits(
+            task=task,
+            task_json=data_structure[task],
+            data_folder=data_folder,
+            splits_dict=splits_dict,
+            split_type='val',
+            extension=datafile_extension,
             lazy_loading=CFG.LAZY_LOAD
         )
 
@@ -154,8 +179,18 @@ if __name__ == '__main__':
             else:
                 train_dataloaders[task] = DataLoader(train_set, batch_size=CFG.BATCH_SIZE, collate_fn=jsondataset_collate_fn, drop_last=True, shuffle=True)
 
+        # Create validation dataloader (no DDP sampler needed - val runs on rank 0 only)
+        if len(val_set) > 0:
+            val_dataloaders[task] = DataLoader(
+                val_set,
+                batch_size=CFG.BATCH_SIZE,
+                collate_fn=jsondataset_collate_fn,
+                drop_last=False,
+                shuffle=False
+            )
+
         if local_rank == 0:
-            logger.debug(f'{len(train_dataloaders[task].dataset)} in train set for {task}')
+            logger.debug(f'Task {task}: {len(train_set)} train, {len(val_set)} val')
             logger.debug("Dataloaders successfully obtained.")
 
     if CFG.ARCHITECTURE['MCN']:
@@ -195,6 +230,7 @@ if __name__ == '__main__':
         get_loss_function(CFG),
         master_experiment_foldername,
         CONFIG=CFG,
+        val_dl_dict=val_dataloaders,
         local_rank=local_rank,
         train_samplers=train_samplers,
         loss_type=loss_type

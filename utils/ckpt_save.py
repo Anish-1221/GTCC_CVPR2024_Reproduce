@@ -1,4 +1,5 @@
 import glob
+import os
 import torch
 from utils.train_util import ckpt_restore_mprong, ckpt_restore_sprong
 
@@ -26,12 +27,21 @@ def ckpt_save(
 
 
 def get_ckpt_MCN(folder, num_heads, device, dropout=False):
-    ckpts = glob.glob(folder + f'/ckpt/*')
-    # Sort checkpoints numerically by epoch number to get the highest epoch
-    ckpts = sorted(ckpts, key=lambda x: int(x.split('epoch-')[-1].split('.')[0]))
-    try:
+    # First check for best_model.pt (from validation-based training)
+    best_model_path = folder + '/ckpt/best_model.pt'
+    if os.path.exists(best_model_path):
+        best_ckpt_file = best_model_path
+        ckpt_handle = "best_model"
+    else:
+        # Fallback: Sort checkpoints numerically by epoch number
+        ckpts = glob.glob(folder + f'/ckpt/epoch-*.pt')
+        if not ckpts:
+            return None, None, None
+        ckpts = sorted(ckpts, key=lambda x: int(x.split('epoch-')[-1].split('.')[0]))
         best_ckpt_file = ckpts[-1]
         ckpt_handle = ".".join(best_ckpt_file.split('/')[-1].split('.')[:-1])
+
+    try:
         model, _, epoch, _, _ = ckpt_restore_mprong(
             best_ckpt_file,
             num_heads=num_heads,
@@ -44,10 +54,21 @@ def get_ckpt_MCN(folder, num_heads, device, dropout=False):
 
 
 def get_ckpt_basic(folder, device):
-    ckpts = glob.glob(folder + f'/ckpt/*')
-    try:
+    # First check for best_model.pt (from validation-based training)
+    best_model_path = folder + '/ckpt/best_model.pt'
+    if os.path.exists(best_model_path):
+        best_ckpt_file = best_model_path
+        ckpt_handle = "best_model"
+    else:
+        # Fallback: Sort checkpoints numerically by epoch number
+        ckpts = glob.glob(folder + f'/ckpt/epoch-*.pt')
+        if not ckpts:
+            return None, None, None
+        ckpts = sorted(ckpts, key=lambda x: int(x.split('epoch-')[-1].split('.')[0]))
         best_ckpt_file = ckpts[-1]
-        ckpt_handle = ".".join(best_ckpt_file.split('/')[-1].split('.'))
+        ckpt_handle = ".".join(best_ckpt_file.split('/')[-1].split('.')[:-1])
+
+    try:
         model, _, epoch, _, _ = ckpt_restore_sprong(
             best_ckpt_file,
             device=device

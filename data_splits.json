@@ -1,0 +1,568 @@
+{
+  "description": "Stratified train/val/test splits for GTCC training",
+  "ratios": {
+    "train": 0.75,
+    "val": 0.1,
+    "test": 0.15
+  },
+  "seed": 42,
+  "counts": {
+    "total": 325,
+    "train": 245,
+    "val": 32,
+    "test": 48
+  },
+  "category_counts": {
+    "BaconAndEggs.egtea": {
+      "train": 12,
+      "val": 2,
+      "test": 2,
+      "total": 16
+    },
+    "Sandwich.cmu": {
+      "train": 23,
+      "val": 3,
+      "test": 5,
+      "total": 31
+    },
+    "tent": {
+      "train": 22,
+      "val": 3,
+      "test": 4,
+      "total": 29
+    },
+    "PastaSalad.egtea": {
+      "train": 14,
+      "val": 2,
+      "test": 3,
+      "total": 19
+    },
+    "pc_disassembly": {
+      "train": 11,
+      "val": 2,
+      "test": 2,
+      "total": 15
+    },
+    "meccano": {
+      "train": 13,
+      "val": 2,
+      "test": 2,
+      "total": 17
+    },
+    "Cheeseburger.egtea": {
+      "train": 8,
+      "val": 1,
+      "test": 1,
+      "total": 10
+    },
+    "Salad.cmu": {
+      "train": 26,
+      "val": 3,
+      "test": 5,
+      "total": 34
+    },
+    "GreekSalad.egtea": {
+      "train": 8,
+      "val": 1,
+      "test": 1,
+      "total": 10
+    },
+    "Eggs.cmu": {
+      "train": 25,
+      "val": 3,
+      "test": 5,
+      "total": 33
+    },
+    "ContinentalBreakfast.egtea": {
+      "train": 9,
+      "val": 1,
+      "test": 2,
+      "total": 12
+    },
+    "TurkeySandwich.egtea": {
+      "train": 10,
+      "val": 1,
+      "test": 2,
+      "total": 13
+    },
+    "pc_assembly": {
+      "train": 10,
+      "val": 1,
+      "test": 3,
+      "total": 14
+    },
+    "Brownie.cmu": {
+      "train": 26,
+      "val": 3,
+      "test": 5,
+      "total": 34
+    },
+    "Pizza.egtea": {
+      "train": 4,
+      "val": 1,
+      "test": 1,
+      "total": 6
+    },
+    "Pizza.cmu": {
+      "train": 24,
+      "val": 3,
+      "test": 5,
+      "total": 32
+    }
+  },
+  "splits": {
+    "BaconAndEggs.egtea": {
+      "train": [
+        "P16-R03-BaconAndEggs",
+        "P18-R03-BaconAndEggs",
+        "OP06-R03-BaconAndEggs",
+        "P02-R03-BaconAndEggs",
+        "P23-R03-BaconAndEggs",
+        "P19-R03-BaconAndEggs",
+        "P21-R03-BaconAndEggs",
+        "P17-R03-BaconAndEggs",
+        "OP02-R03-BaconAndEggs",
+        "OP03-R03-BaconAndEggs",
+        "P22-R03-BaconAndEggs",
+        "P24-R03-BaconAndEggs"
+      ],
+      "val": [
+        "OP05-R03-BaconAndEggs",
+        "P20-R03-BaconAndEggs"
+      ],
+      "test": [
+        "OP01-R03-BaconAndEggs",
+        "OP04-R03-BaconAndEggs"
+      ]
+    },
+    "Sandwich.cmu": {
+      "train": [
+        "S34_Sandwich_7151062-23",
+        "S37_Sandwich_7151062-217",
+        "S53_Sandwich_7151062-175",
+        "S22_Sandwich_7151062-761",
+        "S41_Sandwich_7151062-233",
+        "S20_Sandwich_7151062-713",
+        "S54_Sandwich_7151062-259",
+        "S08_Sandwich_7151062-234",
+        "S28_Sandwich_7151062-11",
+        "S13_Sandwich_7151062-621",
+        "S12_Sandwich_7151062-1432",
+        "S15_Sandwich_7151062-64",
+        "S31_Sandwich_7151062-23",
+        "S48_Sandwich_7151062-287",
+        "S25_Sandwich_7151062-650",
+        "S16_Sandwich_7151062-753",
+        "S50_Sandwich_7151062-213",
+        "S19_Sandwich_7151062-309",
+        "S30_Sandwich_7151062-17",
+        "S55_Sandwich_7151062-304",
+        "S29_Sandwich_7151062-40",
+        "S49_Sandwich_7151062-457",
+        "S47_Sandwich_7151062-190"
+      ],
+      "val": [
+        "S36_Sandwich_7151062-345",
+        "S40_Sandwich_7151062-216",
+        "S17_Sandwich_7151062-2116"
+      ],
+      "test": [
+        "S33_Sandwich_7151062-151",
+        "S07_Sandwich_7151062-1653",
+        "S35_Sandwich_7151062-221",
+        "S32_Sandwich_7151062-26",
+        "S18_Sandwich_7151062-412"
+      ]
+    },
+    "tent": {
+      "train": [
+        "01.tent.090617.gopro",
+        "19.tent.150917.gopro",
+        "06.tent.150617.gopro",
+        "09.tent.170717.gopro",
+        "08.tent.140717.gopro",
+        "20.tent.190917.gopro",
+        "17.tent.140917.gopro",
+        "21.tent.200917.gopro",
+        "29.tent.081119.gopro",
+        "14.tent.081119.gopro",
+        "16.tent.160817.gopro",
+        "05.tent.061417.gopro",
+        "23.tent.200917.gopro",
+        "27.tent.071119.gopro",
+        "11.tent.190717.gopro",
+        "28.tent.081119.gopro",
+        "22.tent.200917.gopro",
+        "07.tent.160617.gopro",
+        "12.tent.190717.gopro",
+        "10.tent.170717.gopro",
+        "25.tent.061119.gopro",
+        "03.tent.061317.gopro"
+      ],
+      "val": [
+        "13.tent.200717.gopro",
+        "04.tent.061417.gopro",
+        "18.tent.150917.gopro"
+      ],
+      "test": [
+        "15.tent.150817.gopro",
+        "24.tent.200917.gopro",
+        "02.tent.120617.gopro",
+        "26.tent.071119.gopro"
+      ]
+    },
+    "PastaSalad.egtea": {
+      "train": [
+        "P06-R01-PastaSalad",
+        "P07-R01-PastaSalad",
+        "P11-R01-PastaSalad",
+        "OP02-R01-PastaSalad",
+        "OP01-R01-PastaSalad",
+        "P10-R01-PastaSalad",
+        "P12-R01-PastaSalad",
+        "P09-R01-PastaSalad",
+        "P01-R01-PastaSalad",
+        "P15-R01-PastaSalad",
+        "P04-R01-PastaSalad",
+        "P13-R01-PastaSalad",
+        "OP04-R01-PastaSalad",
+        "P08-R01-PastaSalad"
+      ],
+      "val": [
+        "P14-R01-PastaSalad",
+        "P02-R01-PastaSalad"
+      ],
+      "test": [
+        "OP03-R01-PastaSalad",
+        "P05-R01-PastaSalad",
+        "P03-R01-PastaSalad"
+      ]
+    },
+    "pc_disassembly": {
+      "train": [
+        "Head_15",
+        "Head_10",
+        "Head_6",
+        "Head_33",
+        "Head_8",
+        "Head_30",
+        "Head_27",
+        "Head_25",
+        "Head_31",
+        "Head_20",
+        "Head_29"
+      ],
+      "val": [
+        "Head_17",
+        "Head_12"
+      ],
+      "test": [
+        "Head_19",
+        "Head_22"
+      ]
+    },
+    "meccano": {
+      "train": [
+        "0004",
+        "0020",
+        "0018",
+        "0014",
+        "0003",
+        "0019",
+        "0008",
+        "0006",
+        "0007",
+        "0009",
+        "0016",
+        "0017",
+        "0010"
+      ],
+      "val": [
+        "0013",
+        "0015"
+      ],
+      "test": [
+        "0012",
+        "0011"
+      ]
+    },
+    "Cheeseburger.egtea": {
+      "train": [
+        "OP01-R05-Cheeseburger",
+        "P10-R05-Cheeseburger",
+        "P26-R05-Cheeseburger",
+        "P02-R05-Cheeseburger",
+        "OP06-R05-Cheeseburger",
+        "P21-R05-Cheeseburger",
+        "OP04-R05-Cheeseburger",
+        "OP02-R05-Cheeseburger"
+      ],
+      "val": [
+        "P04-R05-Cheeseburger"
+      ],
+      "test": [
+        "OP03-R05-Cheeseburger"
+      ]
+    },
+    "Salad.cmu": {
+      "train": [
+        "S28_Salad_7151062-10",
+        "S12_Salad_7151062-1798",
+        "S08_Salad_7151062-284",
+        "S19_Salad_7151062-724",
+        "S54_Salad_7151062-194",
+        "S32_Salad_7151062-31",
+        "S53_Salad_7151062-131",
+        "S41_Salad_7151062-275",
+        "S36_Salad_7151062-163",
+        "S49_Salad_7151062-314",
+        "S35_Salad_7151062-661",
+        "S37_Salad_7151062-236",
+        "S20_Salad_7151062-193",
+        "S33_Salad_7151062-39",
+        "S09_Salad_7151062-1431",
+        "S14_Salad_7151062-896",
+        "S47_Salad_7151062-174",
+        "S48_Salad_7151062-226",
+        "S50_Salad_7151062-223",
+        "S51_Salad_7151062-143",
+        "S29_Salad_7151062-59",
+        "S16_Salad_7151062-706",
+        "S55_Salad_7151062-227",
+        "S25_Salad_7151062-169",
+        "S13_Salad_7151062-4961",
+        "S22_Salad_7151062-770"
+      ],
+      "val": [
+        "S17_Salad_7151062-408",
+        "S11_Salad_7151062-390",
+        "S18_Salad_7151062-231"
+      ],
+      "test": [
+        "S34_Salad_7151062-276",
+        "S40_Salad_7151062-205",
+        "S31_Salad_7151062-11",
+        "S15_Salad_7151062-3449",
+        "S07_Salad_7151062-1782"
+      ]
+    },
+    "GreekSalad.egtea": {
+      "train": [
+        "P10-R06-GreekSalad",
+        "OP06-R06-GreekSalad",
+        "OP03-R06-GreekSalad",
+        "P04-R06-GreekSalad",
+        "P21-R06-GreekSalad",
+        "P02-R06-GreekSalad",
+        "P25-R06-GreekSalad",
+        "OP02-R06-GreekSalad"
+      ],
+      "val": [
+        "OP04-R06-GreekSalad"
+      ],
+      "test": [
+        "OP01-R06-GreekSalad"
+      ]
+    },
+    "Eggs.cmu": {
+      "train": [
+        "S18_Eggs_7151062-2978",
+        "S15_Eggs_7151062-229",
+        "S09_Eggs_7151062-632",
+        "S36_Eggs_7151062-544",
+        "S35_Eggs_7151062-159",
+        "S33_Eggs_7151062-236",
+        "S12_Eggs_7151062-783",
+        "S47_Eggs_7151062-218",
+        "S49_Eggs_7151062-234",
+        "S07_Eggs_7151062-1110",
+        "S50_Eggs_7151062-156",
+        "S30_Eggs_7151062-88",
+        "S41_Eggs_7151062-144",
+        "S11_Eggs_7151062-575",
+        "S08_Eggs_7151062-229",
+        "S37_Eggs_7151062-234",
+        "S48_Eggs_7151062-223",
+        "S29_Eggs_7151062-117",
+        "S20_Eggs_7151062-311",
+        "S25_Eggs_7151062-188",
+        "S17_Eggs_7151062-419",
+        "S40_Eggs_7151062-172",
+        "S51_Eggs_7151062-501",
+        "S14_Eggs_7151062-688",
+        "S28_Eggs_7151062-13"
+      ],
+      "val": [
+        "S34_Eggs_7151062-162",
+        "S31_Eggs_7151062-20",
+        "S55_Eggs_7151062-199"
+      ],
+      "test": [
+        "S13_Eggs_7151062-1484",
+        "S32_Eggs_7151062-21",
+        "S54_Eggs_7151062-227",
+        "S53_Eggs_7151062-239",
+        "S16_Eggs_7151062-572"
+      ]
+    },
+    "ContinentalBreakfast.egtea": {
+      "train": [
+        "P18-R04-ContinentalBreakfast",
+        "P02-R04-ContinentalBreakfast",
+        "P19-R04-ContinentalBreakfast",
+        "P21-R04-ContinentalBreakfast",
+        "OP03-R04-ContinentalBreakfast",
+        "P17-R04-ContinentalBreakfast",
+        "OP05-R04-ContinentalBreakfast",
+        "P20-R04-ContinentalBreakfast",
+        "OP06-R04-ContinentalBreakfast"
+      ],
+      "val": [
+        "OP01-R04-ContinentalBreakfast"
+      ],
+      "test": [
+        "OP02-R04-ContinentalBreakfast",
+        "OP04-R04-ContinentalBreakfast"
+      ]
+    },
+    "TurkeySandwich.egtea": {
+      "train": [
+        "OP03-R02-TurkeySandwich",
+        "OP06-R02-TurkeySandwich",
+        "P01-R02-TurkeySandwich",
+        "OP01-R02-TurkeySandwich",
+        "OP02-R02-TurkeySandwich",
+        "P09-R02-TurkeySandwich",
+        "P05-R02-TurkeySandwich",
+        "P11-R02-TurkeySandwich",
+        "OP04-R02-TurkeySandwich",
+        "P06-R02-TurkeySandwich"
+      ],
+      "val": [
+        "P14-R02-TurkeySandwich"
+      ],
+      "test": [
+        "P10-R02-TurkeySandwich",
+        "P12-R02-TurkeySandwich"
+      ]
+    },
+    "pc_assembly": {
+      "train": [
+        "Head_28",
+        "Head_18",
+        "Head_5",
+        "Head_35",
+        "Head_14",
+        "Head_9",
+        "Head_16",
+        "Head_32",
+        "Head_13",
+        "Head_11"
+      ],
+      "val": [
+        "Head_26"
+      ],
+      "test": [
+        "Head_7",
+        "Head_24",
+        "Head_21"
+      ]
+    },
+    "Brownie.cmu": {
+      "train": [
+        "S55_Brownie_7151062-392",
+        "S13_Brownie_7151062-481",
+        "S34_Brownie_7151062-399",
+        "S28_Brownie_7151062-13",
+        "S54_Brownie_7151062-269",
+        "S20_Brownie_7151062-128",
+        "S18_Brownie_7151062-979",
+        "S19_Brownie_7151062-344",
+        "S32_Brownie_7151062-301",
+        "S31_Brownie_7151062-152",
+        "S37_Brownie_7151062-459",
+        "S35_Brownie_7151062-240",
+        "S50_Brownie_7151062-185",
+        "S29_Brownie_7151062-133",
+        "S15_Brownie_7151062-3915",
+        "S49_Brownie_7151062-193",
+        "S41_Brownie_7151062-214",
+        "S40_Brownie_7151062-240",
+        "S07_Brownie_7151062-1103",
+        "S36_Brownie_7151062-530",
+        "S33_Brownie_7151062-190",
+        "S08_Brownie_7151062-341",
+        "S12_Brownie_7151062-537",
+        "S30_Brownie_7151062-15",
+        "S47_Brownie_7151062-204",
+        "S09_Brownie_7151062-0"
+      ],
+      "val": [
+        "S16_Brownie_7151062-743",
+        "S25_Brownie_7151062-519",
+        "S53_Brownie_7151062-217"
+      ],
+      "test": [
+        "S14_Brownie_7151062-1077",
+        "S24_Brownie_7151062-369",
+        "S17_Brownie_7151062-907",
+        "S48_Brownie_7151062-205",
+        "S22_Brownie_7151062-578"
+      ]
+    },
+    "Pizza.egtea": {
+      "train": [
+        "OP02-R07-Pizza",
+        "OP03-R07-Pizza",
+        "OP01-R07-Pizza",
+        "OP04-R07-Pizza"
+      ],
+      "val": [
+        "OP05-R07-Pizza"
+      ],
+      "test": [
+        "OP06-R07-Pizza"
+      ]
+    },
+    "Pizza.cmu": {
+      "train": [
+        "S49_Pizza_7151062-240",
+        "S29_Pizza_7151062-13",
+        "S25_Pizza_7151062-172",
+        "S17_Pizza_7151062-585",
+        "S41_Pizza_7151062-245",
+        "S14_Pizza_7151062-1297",
+        "S07_Pizza_7151062-1468",
+        "S54_Pizza_7151062-133",
+        "S11_Pizza_7151062-1580",
+        "S22_Pizza_7151062-432",
+        "S19_Pizza_7151062-172",
+        "S28_Pizza_7151062-15",
+        "S09_Pizza_7151062-547",
+        "S34_Pizza_7151062-194",
+        "S18_Pizza_7151062-3276",
+        "S36_Pizza_7151062-367",
+        "S15_Pizza_7151062-5212",
+        "S35_Pizza_7151062-369",
+        "S31_Pizza_7151062-13",
+        "S30_Pizza_7151062-17",
+        "S51_Pizza_7151062-248",
+        "S37_Pizza_7151062-219",
+        "S47_Pizza_7151062-180",
+        "S20_Pizza_7151062-133"
+      ],
+      "val": [
+        "S50_Pizza_7151062-173",
+        "S53_Pizza_7151062-142",
+        "S32_Pizza_7151062-20"
+      ],
+      "test": [
+        "S40_Pizza_7151062-348",
+        "S55_Pizza_7151062-213",
+        "S08_Pizza_7151062-237",
+        "S16_Pizza_7151062-459",
+        "S33_Pizza_7151062-309"
+      ]
+    }
+  }
+}

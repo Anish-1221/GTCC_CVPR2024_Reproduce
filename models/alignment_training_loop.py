@@ -203,12 +203,12 @@ def alignment_training_loop(
         foldername: str,
         CONFIG,
         GPU_intensive=False,
-        test_dl_dict=None,
+        val_dl_dict=None,
         local_rank=0,
         train_samplers=None,
         loss_type=None
     ):
-    """this takes the config for model training and executes the training job
+    """Training loop with validation support.
 
     Args:
         model (nn.Module): pytorch model to train. must take (input_batch, task) and output a return dict
@@ -217,6 +217,10 @@ def alignment_training_loop(
         foldername (str): folderpath for plotting and documentation
         CONFIG (easydict): config EASY dict that follows format of ./configs.
         GPU_intensive (bool): whether to be sparing with GPU memory or not
+        val_dl_dict (dict): validation split {t: DL for t in tasks} (optional)
+        local_rank (int): GPU rank for DDP
+        train_samplers (dict): DDP samplers for training
+        loss_type (str): Type of loss function being used
 
     Returns:
         None
@@ -239,20 +243,15 @@ def alignment_training_loop(
     ### get checkpointing folder
     ckpt_folder = foldername + '/' + 'ckpt'
     validate_folder(ckpt_folder)
-    model_to_save = model.module if hasattr(model, 'module') else model
+    # Note: We no longer save an initial checkpoint here.
+    # Checkpoints are saved only when validation loss improves (as best_model.pt)
 
-    ckpt_save(
-        model_t=model_to_save,
-        optimizer_t=optimizer,
-        epoch_t=0,
-        loss_t=10000000,
-        filename=ckpt_folder + f'/epoch-0.pt',
-        config=CONFIG
-    )
     train_loss_to_plot = []
     epoch_losses_to_plot = []
+    val_losses_to_plot = []
+    best_val_loss = float('inf')
     more_epochs_bool = True
-    
+
     for epoch in range(num_epochs):
         if not more_epochs_bool:
             break
@@ -418,17 +417,53 @@ def alignment_training_loop(
             )
             logger.info(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f} ({time.time() - start:.2f}s)")
         
-        # Checkpoint saving - only on rank 0
-        if (epoch % 5 == 0 or epoch >= num_epochs-3) and local_rank == 0:
-            model_to_save = model.module if hasattr(model, 'module') else model
-            ckpt_save(
-                model_t=model_to_save,
-                optimizer_t=optimizer,
-                epoch_t=epoch,
-                loss_t=running_loss / successful_batches if successful_batches > 0 else 0.0,
-                filename=ckpt_folder + f'/epoch-{epoch+1}.pt',
-                config=CONFIG
+        # === VALIDATION AFTER EACH EPOCH ===
+        if val_dl_dict is not None and local_rank == 0:
+            val_loss = run_validation_epoch(
+                model=model,
+                val_dl_dict=val_dl_dict,
+                loss_fn=loss_fn,
+                epoch=epoch,
+                config=CONFIG,
+                local_rank=local_rank,
+                loss_type=loss_type
             )
+            val_losses_to_plot.append(val_loss)
+
+            # Plot validation loss
+            _simple_loss_plot(
+                val_losses_to_plot,
+                plot_title='Validation Loss over epochs',
+                filename=f'{foldername}/val_loss_epochlevel.png',
+                condition=len(val_losses_to_plot) > 0,
+                scatter=False
+            )
+
+            # Plot combined train/val loss
+            _plot_train_val_loss(
+                epoch_losses_to_plot,
+                val_losses_to_plot,
+                filename=f'{foldername}/train_val_loss.png'
+            )
+
+            logger.info(f"Epoch [{epoch+1}/{num_epochs}], Val Loss: {val_loss:.4f}")
+
+            # Save checkpoint only if validation loss improved
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                logger.info(f"New best validation loss: {val_loss:.4f} - saving checkpoint")
+                model_to_save = model.module if hasattr(model, 'module') else model
+                ckpt_save(
+                    model_t=model_to_save,
+                    optimizer_t=optimizer,
+                    epoch_t=epoch,
+                    loss_t=val_loss,
+                    filename=ckpt_folder + f'/best_model.pt',
+                    config=CONFIG
+                )
+
+        # Restore model to training mode for next epoch
+        model.train()
     # train_loss_to_plot = []
     # epoch_losses_to_plot = []
     # more_epochs_bool = True
@@ -537,3 +572,120 @@ def _simple_loss_plot(loss_list, plot_title, filename, condition, scatter=False)
         (plt.scatter if scatter else plt.plot)([i for i in range(len(loss_list))], loss_list)
         plt.title(plot_title)
         plt.savefig(filename)
+
+
+def _plot_train_val_loss(train_losses, val_losses, filename):
+    """Plot training and validation losses on the same figure."""
+    plt.clf()
+    epochs = range(1, len(train_losses) + 1)
+    plt.plot(epochs, train_losses, 'b-', label='Training Loss')
+    if val_losses:
+        val_epochs = range(1, len(val_losses) + 1)
+        plt.plot(val_epochs, val_losses, 'r-', label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss')
+    plt.legend()
+    plt.savefig(filename)
+
+
+def run_validation_epoch(
+    model,
+    val_dl_dict: dict,
+    loss_fn: callable,
+    epoch: int,
+    config,
+    local_rank: int = 0,
+    loss_type: str = None
+) -> float:
+    """
+    Run validation for one epoch.
+
+    CRITICAL: This function sets model.eval() and uses torch.no_grad().
+    The caller must restore model.train() after this function returns.
+
+    Args:
+        model: The model (will be set to eval mode)
+        val_dl_dict: Dict of validation dataloaders per task
+        loss_fn: Loss function (same as training)
+        epoch: Current epoch number
+        config: Configuration object
+        local_rank: GPU rank for DDP
+        loss_type: Type of loss for threshold selection
+
+    Returns:
+        Average validation loss across all batches
+    """
+    # CRITICAL: Set model to evaluation mode
+    model.eval()
+
+    running_loss = 0.0
+    successful_batches = 0
+    skipped_batches = 0
+
+    # CRITICAL: Disable gradient computation for validation
+    with torch.no_grad():
+        all_val_batches = _get_all_batches_with_taskid(val_dl_dict)
+
+        for i, (task, (inputs, times)) in enumerate(all_val_batches):
+            torch.cuda.empty_cache()
+
+            inputs, times = preprocess_batch(
+                inputs, times,
+                device=device,
+                skip_rate=config.SKIP_RATE
+            )
+
+            # Skip short sequences (same logic as training)
+            MIN_SEQ_LENGTH = 10
+            if any(seq.shape[0] < MIN_SEQ_LENGTH for seq in inputs):
+                skipped_batches += 1
+                del inputs
+                continue
+
+            # Skip if max pairwise product too large
+            seq_lengths = sorted([seq.shape[0] for seq in inputs], reverse=True)
+            if len(seq_lengths) >= 2:
+                max_pairwise = seq_lengths[0] * seq_lengths[1]
+            else:
+                max_pairwise = seq_lengths[0] ** 2
+
+            max_pairwise_threshold = MAX_PAIRWISE_THRESHOLDS.get(
+                loss_type, MAX_PAIRWISE_THRESHOLDS['default']
+            )
+
+            if max_pairwise > max_pairwise_threshold:
+                skipped_batches += 1
+                del inputs
+                continue
+
+            try:
+                # Forward pass (no gradients)
+                output_dict = model(inputs)
+
+                # Compute loss
+                loss_dict = loss_fn(output_dict, epoch)
+
+                if loss_dict is not None and loss_dict['total_loss'] is not None:
+                    loss = loss_dict['total_loss']
+                    if not contains_non_float_values(loss):
+                        running_loss += loss.item()
+                        successful_batches += 1
+
+                del output_dict
+
+            except Exception as e:
+                skipped_batches += 1
+                if local_rank == 0:
+                    logger.warning(f"[VAL] Skipping batch in {task}: {type(e).__name__}")
+
+            del inputs
+            gc.collect()
+            torch.cuda.empty_cache()
+
+    avg_val_loss = running_loss / successful_batches if successful_batches > 0 else float('inf')
+
+    if local_rank == 0:
+        logger.info(f"[VAL] Batches: {successful_batches}, Skipped: {skipped_batches}, Avg Loss: {avg_val_loss:.4f}")
+
+    return avg_val_loss
