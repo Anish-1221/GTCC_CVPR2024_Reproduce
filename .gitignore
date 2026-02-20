@@ -5,3 +5,5 @@ output_batch
 Output_gtcc_protas
 output_4fps_val
 output_val
+testLavLoss1.log
+testVavaLoss1.log

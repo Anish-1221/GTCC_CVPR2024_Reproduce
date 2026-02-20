@@ -183,7 +183,7 @@ import gc
 #   - Intermediate R matrices stored for backward pass
 #   - Additional N×N and M×M matrices for IntraContrast
 MAX_PAIRWISE_THRESHOLDS = {
-    'LAV': 4_000_000,       # LAV uses more memory due to SoftDTW
+    'LAV': 3_000_000,       # Lowered: LAV backward pass needs more memory than forward (OOM at 3.4M+)
     'GTCC': 8_000_000,      # ~8M pairwise products max for 22.5GB GPU at 4fps
     'tcc': 8_000_000,       # Same as GTCC
     'VAVA': 6_000_000,      # VAVA uses moderate extra memory for OT
@@ -380,7 +380,13 @@ def alignment_training_loop(
                 if "out of memory" in str(e):
                     if local_rank == 0:
                         logger.error(f"[OOM BACKWARD] Task: {task} - skipping")
+                    # CRITICAL: Delete all tensors that hold computation graph references
                     del loss
+                    del loss_dict
+                    # Clear all model gradients explicitly
+                    for param in model.parameters():
+                        if param.grad is not None:
+                            param.grad = None
                     gc.collect()
                     optimizer.zero_grad(set_to_none=True)
                     torch.cuda.empty_cache()
@@ -416,7 +422,17 @@ def alignment_training_loop(
                 scatter=False
             )
             logger.info(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f} ({time.time() - start:.2f}s)")
-        
+
+        # === AGGRESSIVE MEMORY CLEANUP BEFORE VALIDATION ===
+        # OOM errors during training can leave memory stuck in PyTorch's CUDA cache
+        # This ensures we have maximum available memory for validation
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        if local_rank == 0:
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            logger.info(f"[PRE-VALIDATION] Memory after cleanup: {allocated:.2f}GB")
+
         # === VALIDATION AFTER EACH EPOCH ===
         if val_dl_dict is not None and local_rank == 0:
             val_loss = run_validation_epoch(

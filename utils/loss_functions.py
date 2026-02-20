@@ -74,7 +74,7 @@ def IntraContrast_loss(sequence, idx_range, window=7, margin=2):
     inside_window = margin_identity * W_matrix * margin
 
     # Compute result
-    result = (outside_window + inside_window).mean()
+    result = (outside_window + inside_window).sum()
 
     # Aggressive cleanup of large tensors
     del DX, margin_identity, margin_nidentity, W_matrix, outside_window, inside_window
@@ -163,13 +163,12 @@ def LAV_loss(sequences, min_temp=.1, cr_coefficient=0.01):
             M = v2.shape[0]
             idx_range_M = torch.arange(0, M, dtype=torch.float, device=v2.device).detach()
 
-            # SoftDTW alignment term (needs gradients for learning)
+            # SoftDTW alignment term
             soft_dtw_term = softdtw(v1, v2)
 
-            # IntraContrast regularization (no gradients needed - just regularization)
-            with torch.no_grad():
-                x_cr_term = IntraContrast_loss(v1, idx_range_N, window=15)
-                y_cr_term = IntraContrast_loss(v2, idx_range_M, window=15)
+            # IntraContrast regularization (gradients needed for contrastive learning)
+            x_cr_term = IntraContrast_loss(v1, idx_range_N, window=15)
+            y_cr_term = IntraContrast_loss(v2, idx_range_M, window=15)
 
             # Combine: alignment + regularization
             pair_loss = soft_dtw_term + cr_coefficient * (x_cr_term + y_cr_term)
@@ -264,7 +263,7 @@ def LAV_loss(sequences, min_temp=.1, cr_coefficient=0.01):
 #     return loss_term
 
 def VAVA_loss(sequences, global_step, maxIter=20, zeta=0.5, delta=0.6, gamma=0.5):
-    loss_term = torch.tensor(0.0, device=device)
+    loss_term = None
     
     # Correct phi calculation matching the GTCC/TensorFlow logic
     # Using sqrt(step) slows decay to ensure alignment is learned before diagonal prior vanishes
@@ -295,8 +294,8 @@ def VAVA_loss(sequences, global_step, maxIter=20, zeta=0.5, delta=0.6, gamma=0.5
             D = torch.cat((torch.ones(M, device=device)[None, :] * zeta, D), dim=0)
             D = torch.cat((torch.ones(N+1, device=device)[:, None] * zeta, D), dim=1)
             
-            # Note: reg must be l2 for VAVA replication
-            dist, T = sink(D, reg=l2, cuda=True, numItermax=maxIter)
+            # Use reg=N (matches original implementation)
+            dist, T = sink(D, reg=N, cuda=True, numItermax=maxIter)
             
             # 2. Alignment Regularization Matrices
             lc = get_diag_consistency_matrix(N+1, M+1, idx_range_N, idx_range_M)
@@ -317,23 +316,28 @@ def VAVA_loss(sequences, global_step, maxIter=20, zeta=0.5, delta=0.6, gamma=0.5
             # KL Divergence
             KL_T_P = torch.sum(T * torch.log((T + 1e-8) / (P + 1e-8)))
 
-            # 3. Normalized VAVA Core
-            # We divide by (N*M) to keep alignment loss on same scale as contrastive loss
-            vava_dis = (dist - l1 * I_T + l2 * KL_T_P) / (N * M)
+            # 3. VAVA Core (original formula without normalization)
+            vava_loss = dist - l1 * I_T + l2 * KL_T_P
 
             # 4. Contrastive Terms
             C_X = IntraContrast_loss(v1, idx_range_N[:-1], window=15)
             C_Y = IntraContrast_loss(v2, idx_range_M[:-1], window=15)
-            
-            # C(XY) is already a sum, so we average C_X and C_Y per the paper
-            cr_loss = 0.5 * (C_X + C_Y) 
+
+            # C(X, Y) - cross-sequence contrastive term
+            A = get_A(T, N+1, M+1)
+            Abar = get_Abar(T, N+1, M+1)
+            C_XY = torch.sum(A * D - Abar * D)
+
+            cr_loss = C_X + C_Y + C_XY 
 
             # Add to total
-            current_pair_loss = vava_dis + gamma * cr_loss
-            loss_term = loss_term + current_pair_loss
-            
+            if loss_term is None:
+                loss_term = vava_loss + gamma * cr_loss
+            else:
+                loss_term = loss_term + vava_loss + gamma * cr_loss
+
             # Clean up pair-specific tensors to prevent OOM
-            del D, T, lc, lo, Pc, Po, P, Ic_T, Io_T, I_T, KL_T_P
+            del D, T, lc, lo, Pc, Po, P, Ic_T, Io_T, I_T, KL_T_P, A, Abar, C_XY
 
     return loss_term
 
