@@ -229,43 +229,40 @@ class OnlineGeoProgressError:
         return self.name
 
     def __call__(self, model, config_obj, epoch, test_dataloaders, testfolder, tasks, normalize=False, plotting=False):
-        WHITELIST_PATH = '/vision/anishn/GTCC_CVPR2024/evaluation_video_whitelist.json'
-        PROTAS_BASE = '/vision/anishn/ProTAS/data_1fps/'
-        
+        # [4FPS FIX] Detect if model is 4fps based on folder path
+        is_4fps = '4fps' in testfolder
+
+        if is_4fps:
+            PROTAS_BASE = '/vision/anishn/ProTAS/data_4fps/'
+            print(f"[INFO] Detected 4fps model, using 4fps paths")
+        else:
+            PROTAS_BASE = '/vision/anishn/ProTAS/data_1fps/'
+
         plot_folder = testfolder + '/plotting_progress'
         validate_folder(plot_folder)
-        
-        # Load whitelist
-        video_whitelist = None
-        if os.path.exists(WHITELIST_PATH):
-            with open(WHITELIST_PATH, 'r') as f:
-                data = json.load(f)
-            video_whitelist = set(data['video_names'])
-            print(f"[INFO] Test set whitelist: {len(video_whitelist)} videos")
-        
-        # Load action means for action-level normalization
-        # Select file based on model type (VAVA vs GTCC vs TCC vs LAV)
-        action_means = None
-        if config_obj.LOSS_TYPE.get('VAVA', False):
-            action_means_path = '/vision/anishn/GTCC_CVPR2024/vava_action_means.json'
-            model_type = 'VAVA'
-        elif config_obj.LOSS_TYPE.get('tcc', False):
-            action_means_path = '/vision/anishn/GTCC_CVPR2024/tcc_action_means.json'
-            model_type = 'TCC'
-        elif config_obj.LOSS_TYPE.get('LAV', False):
-            action_means_path = '/vision/anishn/GTCC_CVPR2024/lav_action_means.json'
-            model_type = 'LAV'
-        else:
-            action_means_path = '/vision/anishn/GTCC_CVPR2024/gtcc_action_means.json'
-            model_type = 'GTCC'
 
-        if os.path.exists(action_means_path):
-            with open(action_means_path, 'r') as f:
-                action_means = json.load(f)
-            print(f"[INFO] Loaded {model_type} action means: {len(action_means)} actions")
+        # [LEARNABLE PROGRESS] Check if model uses learnable progress head
+        # Learnable models don't need action_means.json - they predict progress directly
+        use_learnable_progress = hasattr(model, 'use_progress_head') and model.use_progress_head
+
+        if use_learnable_progress:
+            print(f"[INFO] Detected LEARNABLE progress model - using ProgressHead directly")
+            action_means = None  # Not needed for learnable models
         else:
-            print(f"[ERROR] Action means not found at {action_means_path}")
-            return None
+            # [CUMULATIVE L2] Load action means from EXPERIMENT FOLDER
+            # Each model has its own action_means.json stored alongside its checkpoint
+            action_means_path = os.path.join(testfolder, 'action_means.json')
+
+            action_means = None
+            if os.path.exists(action_means_path):
+                with open(action_means_path, 'r') as f:
+                    action_means = json.load(f)
+                print(f"[INFO] Loaded action means from experiment folder: {len(action_means)} actions")
+            else:
+                print(f"[ERROR] Action means not found at {action_means_path}")
+                print(f"[ERROR] Run: python generate_aligned_features.py --exp_folder {testfolder}")
+                print(f"[ERROR] Then: python calculate_action_means.py --exp_folder {testfolder}")
+                return None
         
         def parse_groundtruth_to_segments(gt_path):
             """Read ground truth .txt and parse into segments"""
@@ -302,36 +299,30 @@ class OnlineGeoProgressError:
             validate_folder(taskplot)
             dset_json_folder = get_env_variable('JSON_DPATH')
             data_structure = data_json_labels_handles(dset_json_folder, dset_name=config_obj['DATASET_NAME'])
-            
-            if os.path.isdir(testfolder + '/ckpt'):
-                train_cum_means, train_cum_vars = get_average_train_cum_distance(
-                    model, testfolder, data_structure, targ_task=task, skip_rate=config_obj.SKIP_RATE
-                )
-            elif os.path.isdir(testfolder + f'/{task}/ckpt'):
-                train_cum_means, train_cum_vars = get_average_train_cum_distance(
-                    model, testfolder + f'/{task}', data_structure, targ_task=task, skip_rate=config_obj.SKIP_RATE
-                )
-            
-            if None in [train_cum_means, train_cum_vars]:
-                return None
-            if task not in train_cum_means.keys():
-                print(f'BTW {task} not in tasks')
-                return None
+
+            # [LEARNABLE] Skip train_cum calculation for learnable progress models
+            if use_learnable_progress:
+                train_cum_means = {task: 1.0}  # Placeholder, not used
+                train_cum_vars = {task: 0.0}
+            else:
+                if os.path.isdir(testfolder + '/ckpt'):
+                    train_cum_means, train_cum_vars = get_average_train_cum_distance(
+                        model, testfolder, data_structure, targ_task=task, skip_rate=config_obj.SKIP_RATE
+                    )
+                elif os.path.isdir(testfolder + f'/{task}/ckpt'):
+                    train_cum_means, train_cum_vars = get_average_train_cum_distance(
+                        model, testfolder + f'/{task}', data_structure, targ_task=task, skip_rate=config_obj.SKIP_RATE
+                    )
+
+                if None in [train_cum_means, train_cum_vars]:
+                    return None
+                if task not in train_cum_means.keys():
+                    print(f'BTW {task} not in tasks')
+                    return None
             
             gpe_list = []
             embedded_dl = flatten_dataloader_and_get_dict(model, test_dataloaders[task], config_obj.SKIP_RATE, device='cpu')
-            
-            # Whitelist filtering
-            if video_whitelist is not None:
-                filtered_dl = []
-                for output_dict, tdict in embedded_dl:
-                    video_name = output_dict.get('name', '')
-                    video_name = os.path.splitext(os.path.basename(video_name))[0]
-                    if video_name in video_whitelist:
-                        filtered_dl.append((output_dict, tdict))
-                print(f"[INFO] GTCC: Using {len(filtered_dl)}/{len(embedded_dl)} whitelisted videos")
-                embedded_dl = filtered_dl
-            
+
             if normalize:
                 embedded_dl = svm_normalize_embedded_dl(embedded_dl=embedded_dl)
             
@@ -372,36 +363,65 @@ class OnlineGeoProgressError:
                 
                 # Get action-local ground truth progress (0->1 per action)
                 true_progress = get_trueprogress_per_action(tdict)
-                
-                # Calculate predicted progress with action-specific normalization
+
+                # Calculate predicted progress
                 pred2_progress = torch.zeros(current_len)
-                
-                for seg in segments:
-                    action_name = seg['name']
-                    start = max(0, min(seg['start'], current_len-1))
-                    end = max(0, min(seg['end'], current_len-1))
-                    
-                    if start >= current_len:
+
+                if use_learnable_progress:
+                    # [LEARNABLE PROGRESS] Use ProgressHead for ONLINE per-frame prediction
+                    # Similar to how cumulative_l2 computes cumulative distance at each frame
+                    progress_head = outputs_dict.get('progress_head')
+                    if progress_head is None:
+                        print(f"[ERROR] Learnable model missing progress_head in output")
                         continue
-                    
-                    # Extract segment outputs (cumulative distance resets automatically)
-                    segment_outputs = outputs[start:end+1]
-                    segment_cum = get_cum_matrix(segment_outputs)
-                    
-                    if action_name not in ['SIL', 'background']:
-                        # Use action-specific mean normalization
-                        if action_name in action_means:
-                            action_mean = action_means[action_name]['mean']
-                            if action_mean > 0:
-                                pred2_progress[start:end+1] = segment_cum / action_mean
+
+                    for seg in segments:
+                        action_name = seg['name']
+                        start = max(0, min(seg['start'], current_len-1))
+                        end = max(0, min(seg['end'], current_len-1))
+
+                        if start >= current_len or action_name in ['SIL', 'background']:
+                            continue
+
+                        # ONLINE PER-FRAME PREDICTION:
+                        # For each frame t, predict progress using only frames [start:t+1]
+                        # This mirrors how cumulative_l2 computes cumulative distance at each frame
+                        with torch.no_grad():
+                            for t in range(start, end + 1):
+                                # Extract partial segment from action start up to current frame
+                                partial_segment = outputs[start:t+1].to(device)
+
+                                # Predict progress at frame t using only past frames (within this action)
+                                pred_progress_t = progress_head(partial_segment)
+                                pred2_progress[t] = pred_progress_t.item()
+                else:
+                    # [CUMULATIVE L2] Use action means for normalization
+                    for seg in segments:
+                        action_name = seg['name']
+                        start = max(0, min(seg['start'], current_len-1))
+                        end = max(0, min(seg['end'], current_len-1))
+
+                        if start >= current_len:
+                            continue
+
+                        # Extract segment outputs (cumulative distance resets automatically)
+                        segment_outputs = outputs[start:end+1]
+                        segment_cum = get_cum_matrix(segment_outputs)
+
+                        if action_name not in ['SIL', 'background']:
+                            # Use action-specific mean normalization
+                            if action_name in action_means:
+                                action_mean = action_means[action_name]['mean']
+                                if action_mean > 0:
+                                    pred2_progress[start:end+1] = segment_cum / action_mean
+                                else:
+                                    print(f"[WARNING] Zero mean for action '{action_name}', skipping")
                             else:
-                                print(f"[WARNING] Zero mean for action '{action_name}', skipping")
-                        else:
-                            print(f"[WARNING] Action '{action_name}' not in action_means, using video-level mean")
-                            # Fallback to video-level mean
-                            if train_cum_means[task] > 0:
-                                pred2_progress[start:end+1] = segment_cum / train_cum_means[task]
-                    # else: background stays at 0
+                                print(f"[WARNING] Action '{action_name}' not in action_means, using video-level mean")
+                                # Fallback to video-level mean
+                                if train_cum_means[task] > 0:
+                                    pred2_progress[start:end+1] = segment_cum / train_cum_means[task]
+                        # else: background stays at 0
 
                 # Create mask to exclude background/SIL frames (only evaluate on action frames)
                 action_mask = torch.zeros(len(true_progress), dtype=torch.bool)
@@ -437,13 +457,20 @@ class OnlineGeoProgressError:
             if not gpe_list:
                 print(f"[WARNING] No data processed for task {task}")
                 continue
-            
-            return {
+
+            result = {
                 'task': task,
                 'ogpe': np.mean(gpe_list),
-                'CoV': train_cum_vars[task] / train_cum_means[task],
                 'num_videos': len(gpe_list)
             }
+
+            # CoV only meaningful for cumulative L2 models
+            if not use_learnable_progress and train_cum_means[task] > 0:
+                result['CoV'] = train_cum_vars[task] / train_cum_means[task]
+            else:
+                result['CoV'] = 0.0  # N/A for learnable models
+
+            return result
 
     # def __call__(self, model, config_obj, epoch, test_dataloaders, testfolder, tasks, normalize=False, plotting=False):
     #     WHITELIST_PATH = '/vision/anishn/GTCC_CVPR2024/evaluation_video_whitelist.json'

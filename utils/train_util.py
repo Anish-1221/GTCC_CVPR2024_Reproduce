@@ -50,6 +50,20 @@ def ckpt_restore_mprong(path, num_heads, dropout=False, device='cpu'):
     checkpoint = torch.load(path, map_location="cpu")
     config_obj = checkpoint['config']
     base_model_class, base_model_params = get_base_model_deets(config_obj)
+
+    # [LEARNABLE PROGRESS] Detect if checkpoint has progress_head
+    state_dict = checkpoint['model_state_dict']
+    has_progress_head = any(k.startswith('progress_head.') for k in state_dict.keys())
+
+    # Build progress_head_config if needed
+    progress_head_config = None
+    if has_progress_head:
+        # Default config - matches training setup
+        progress_head_config = {
+            'hidden_dim': 64,
+            'use_gru': True
+        }
+
     if 'drop_layers' in config_obj['ARCHITECTURE'].keys():
         model = MultiProngAttDropoutModel(
             base_model_class=base_model_class,
@@ -59,6 +73,8 @@ def ckpt_restore_mprong(path, num_heads, dropout=False, device='cpu'):
             dropping=dropout,
             attn_layers=config_obj['ARCHITECTURE']['attn_layers'],
             drop_layers=config_obj['ARCHITECTURE']['drop_layers'],
+            use_progress_head=has_progress_head,
+            progress_head_config=progress_head_config,
         ).to(device)
     else:
         model = MultiProngAttDropoutModel(
@@ -68,6 +84,8 @@ def ckpt_restore_mprong(path, num_heads, dropout=False, device='cpu'):
             num_heads=num_heads,
             dropping=False,
             attn_layers=config_obj['ARCHITECTURE']['attn_layers'],
+            use_progress_head=has_progress_head,
+            progress_head_config=progress_head_config,
         ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config_obj['LEARNING_RATE'])
 

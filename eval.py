@@ -210,14 +210,17 @@ import copy
 import argparse
 import sys
 
+import json
 import pandas as pd
-from models.json_dataset import get_test_dataloaders
+from models.json_dataset import get_test_dataloaders, jsondataset_from_splits, data_json_labels_handles
+from torch.utils.data import DataLoader
+from utils.collate_functions import jsondataset_collate_fn
+from utils.train_util import get_data_subfolder_and_extension
 import numpy as np
 import torch
 
 from utils.ckpt_save import get_ckpt_for_eval
 from utils.os_util import get_env_variable
-from models.json_dataset import data_json_labels_handles
 
 # [4FPS MODIFICATION] Added --level argument to switch between video-level and action-level evaluation
 # Parse args early to determine which evaluation module to import
@@ -257,6 +260,13 @@ from utils.train_util import get_config_for_folder
 # GLOBAL VARS
 logger = configure_logging_format()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def load_splits_from_json(splits_path='/vision/anishn/GTCC_CVPR2024/data_splits.json'):
+    """Load pre-computed train/val/test splits."""
+    with open(splits_path, 'r') as f:
+        splits_data = json.load(f)
+    return splits_data['splits']
 
 
 def update_json_dict_and_save(ckpt_out_folder, test_object, historical_json, update_json):
@@ -372,13 +382,36 @@ if __name__ == '__main__':
     testTASKS = TASKS # edit if you see fit
 
     ##########################################
-    # get all test dataloaders
-    test_dataloaders = get_test_dataloaders(
-        tasks=testTASKS,
-        data_structure=data_structure,
-        config=config,
-        device=device
+    # get all test dataloaders using fixed splits from data_splits.json
+    # [FIX] Previously used get_test_dataloaders with random splits,
+    # now using jsondataset_from_splits with fixed train/val/test splits
+    splits_dict = load_splits_from_json()
+
+    data_subfolder_name, datafile_extension = get_data_subfolder_and_extension(
+        architecture=config.BASEARCH.ARCHITECTURE
     )
+    data_folder = f'{config.DATAFOLDER}/{data_subfolder_name}'
+
+    test_dataloaders = {}
+    for task in testTASKS:
+        test_set = jsondataset_from_splits(
+            task=task,
+            task_json=data_structure[task],
+            data_folder=data_folder,
+            splits_dict=splits_dict,
+            split_type='test',
+            extension=datafile_extension,
+            lazy_loading=config.LAZY_LOAD
+        )
+        logger.info(f'{len(test_set)} videos in test set for {task}')
+        batch_size = config.BATCH_SIZE if config.BATCH_SIZE else len(test_set)
+        test_dataloaders[task] = DataLoader(
+            test_set,
+            batch_size=batch_size,
+            collate_fn=jsondataset_collate_fn,
+            drop_last=False,  # Don't drop last batch for evaluation
+            shuffle=False
+        )
 
     ##########################################
     # print summary information

@@ -1,7 +1,17 @@
 import glob
 import os
+import math
 import torch
 from utils.train_util import ckpt_restore_mprong, ckpt_restore_sprong
+
+
+def has_nan_weights(model):
+    """Check if any model parameters contain NaN or Inf values."""
+    for name, param in model.named_parameters():
+        if param is not None and torch.is_floating_point(param):
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                return True, name
+    return False, None
 
 
 def ckpt_save(
@@ -14,7 +24,19 @@ def ckpt_save(
     ):
     """
         Creates checkpoint with necessary data.
+        Skips saving if loss is NaN/Inf or model weights contain NaN/Inf.
     """
+    # [NaN PROTECTION] Check if loss is valid
+    if loss_t is not None and (math.isnan(loss_t) or math.isinf(loss_t)):
+        print(f"[WARNING] Skipping checkpoint save - loss is {loss_t} (NaN/Inf)")
+        return False
+
+    # [NaN PROTECTION] Check if model weights are valid
+    has_nan, param_name = has_nan_weights(model_t)
+    if has_nan:
+        print(f"[WARNING] Skipping checkpoint save - NaN/Inf detected in model parameter: {param_name}")
+        return False
+
     # Additional information
     ckpt_dict = {
         'config': config,
@@ -24,6 +46,7 @@ def ckpt_save(
         'optimizer_state_dict': optimizer_t.state_dict(),
     }
     torch.save(ckpt_dict, filename)
+    return True
 
 
 def get_ckpt_MCN(folder, num_heads, device, dropout=False):

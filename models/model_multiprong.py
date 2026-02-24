@@ -140,9 +140,49 @@ from utils.logging import configure_logging_format
 logger = configure_logging_format()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
+class ProgressHead(nn.Module):
+    """
+    Learnable progress prediction head.
+    Takes segment embeddings and predicts progress at the final frame.
+    """
+    def __init__(self, input_dim=128, hidden_dim=64, use_gru=True):
+        super(ProgressHead, self).__init__()
+        self.use_gru = use_gru
+
+        if use_gru:
+            self.gru = nn.GRU(input_dim, hidden_dim, num_layers=1,
+                              batch_first=True, bidirectional=False)
+            self.fc = nn.Sequential(
+                nn.Linear(hidden_dim, 32),
+                nn.ReLU(),
+                nn.Linear(32, 1),
+                nn.Sigmoid()
+            )
+        else:
+            self.fc = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, 32),
+                nn.ReLU(),
+                nn.Linear(32, 1),
+                nn.Sigmoid()
+            )
+
+    def forward(self, segment_embeddings):
+        if self.use_gru:
+            x = segment_embeddings.unsqueeze(0)  # (1, T, D)
+            _, h_n = self.gru(x)                  # h_n: (1, 1, hidden_dim)
+            progress = self.fc(h_n.squeeze())
+        else:
+            x = segment_embeddings.mean(dim=0)    # Mean pool: (D,)
+            progress = self.fc(x)
+        return progress.squeeze()
+
+
 class MultiProngAttDropoutModel(nn.Module):
     def __init__(
-        self, 
+        self,
         base_model_class,
         base_model_params,
         output_dimensionality,
@@ -150,6 +190,8 @@ class MultiProngAttDropoutModel(nn.Module):
         dropping=False,
         attn_layers = [512, 256],
         drop_layers = [512, 128, 256],
+        use_progress_head=False,
+        progress_head_config=None,
     ):
         super(MultiProngAttDropoutModel, self).__init__()
         self.num_classes = num_heads
@@ -176,6 +218,15 @@ class MultiProngAttDropoutModel(nn.Module):
                 nn.Linear(drop_layers[-1], output_dimensionality + 1)
             )
 
+        # Progress head (for learnable progress loss)
+        self.use_progress_head = use_progress_head
+        if use_progress_head and progress_head_config is not None:
+            self.progress_head = ProgressHead(
+                input_dim=output_dimensionality,
+                hidden_dim=progress_head_config.get('hidden_dim', 64),
+                use_gru=progress_head_config.get('use_gru', True)
+            )
+
     def forward(self, videos):
         general_features = self.base_model(videos)['outputs']
         prong_outputs = [prong(general_features) for prong in self.head_models]
@@ -196,10 +247,13 @@ class MultiProngAttDropoutModel(nn.Module):
                 dout = self.dropout(combined_embedding).mean(dim=0)
                 dropouts.append(dout)
 
+        result = {'outputs': outputs, 'attentions': attentions}
         if self.dropping:
-            return {'outputs': outputs, 'attentions': attentions, 'dropouts': dropouts}
-        else:
-            return {'outputs': outputs, 'attentions': attentions}
+            result['dropouts'] = dropouts
+        if self.use_progress_head:
+            result['progress_head'] = self.progress_head
+        return result
+
 
 class HeadModel(nn.Module):
     def __init__(self, output_dimensionality, class_name, layers=[512, 128, 256]):

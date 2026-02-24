@@ -311,16 +311,18 @@ def get_trueprogress(time_dict):
 
 def get_trueprogress_per_action(time_dict):
     """Each action goes 0->1 independently"""
+    # '0' is the action ID for 'background' in egoprocel.json
+    BACKGROUND_LABELS = ['0', 'SIL', 'background']
     N = time_dict['end_frame'][-1] + 1
     progress = torch.zeros(N)
-    
+
     for step, start, end in zip(time_dict['step'], time_dict['start_frame'], time_dict['end_frame']):
-        if step not in ['SIL', 'background']:
+        if step not in BACKGROUND_LABELS:
             segment_length = end - start + 1
             progress[start:end+1] = torch.arange(1, segment_length + 1, dtype=torch.float) / segment_length
         else:
             progress[start:end+1] = 0
-    
+
     return progress
 
 
@@ -331,6 +333,81 @@ def get_cum_matrix(video):
     return P
 
 
+def get_normalized_predicted_progress_action(features, time_dict):
+    """
+    Compute predicted progress normalized to [0, 1] for ACTION-LEVEL.
+    Cumulative L2 distance resets at each action boundary.
+    SIL/background segments get progress = 0.
+    """
+    # '0' is the action ID for 'background' in egoprocel.json
+    BACKGROUND_LABELS = ['0', 'SIL', 'background']
+    T = features.shape[0]
+    pred_progress = torch.zeros(T, device=features.device)
+
+    for step, start, end in zip(time_dict['step'],
+                                 time_dict['start_frame'],
+                                 time_dict['end_frame']):
+        start = max(0, min(start, T - 1))
+        end = max(0, min(end, T - 1))
+
+        if step in BACKGROUND_LABELS:
+            pred_progress[start:end+1] = 0
+        else:
+            segment_features = features[start:end+1]
+            if segment_features.shape[0] < 2:
+                pred_progress[start:end+1] = 0.5
+            else:
+                segment_cum = get_cum_matrix(segment_features)
+                max_val = segment_cum[-1]
+                if max_val > 0:
+                    pred_progress[start:end+1] = segment_cum / max_val
+                else:
+                    seg_len = end - start + 1
+                    pred_progress[start:end+1] = torch.linspace(0, 1, seg_len, device=features.device)
+
+    return pred_progress
+
+
+def sample_action_segment_with_random_index(embeddings, times_dict, min_segment_len=3):
+    """
+    Sample a random segment within a random non-SIL action.
+    Returns segment embeddings up to random target index and GT progress.
+    """
+    # '0' is the action ID for 'background' in egoprocel.json
+    BACKGROUND_LABELS = ['0', 'SIL', 'background']
+    valid_actions = []
+    for idx, (step, start, end) in enumerate(zip(
+        times_dict['step'], times_dict['start_frame'], times_dict['end_frame']
+    )):
+        action_length = end - start + 1
+        if step not in BACKGROUND_LABELS and action_length >= min_segment_len:
+            valid_actions.append((idx, step, start, end))
+
+    if len(valid_actions) == 0:
+        return None, None, None
+
+    _, action_name, action_start, action_end = random.choice(valid_actions)
+    action_length = action_end - action_start + 1
+
+    max_start = action_end - min_segment_len + 1
+    if max_start < action_start:
+        max_start = action_start
+
+    seg_start = random.randint(action_start, max_start)
+    seg_end = random.randint(seg_start + min_segment_len - 1, action_end)
+    target_idx = random.randint(seg_start, seg_end)
+
+    T = embeddings.shape[0]
+    seg_start = max(0, min(seg_start, T - 1))
+    target_idx = max(seg_start, min(target_idx, T - 1))
+
+    segment_embeddings = embeddings[seg_start:target_idx + 1]
+    progress_at_target = (target_idx - action_start + 1) / action_length
+    gt_progress = min(1.0, max(0.0, progress_at_target))
+
+    return segment_embeddings, gt_progress, action_name
+
+
 def flatten_dataloader_and_get_dict(model, dl, skip_rate=None, device='cpu'):
     l = []
     for i, (inputs, times) in enumerate(list(iter(dl))):
@@ -338,9 +415,16 @@ def flatten_dataloader_and_get_dict(model, dl, skip_rate=None, device='cpu'):
         with torch.no_grad():
             output_dict = model(data)
         del data
+
+        # [LEARNABLE PROGRESS] Separate progress_head module from tensor outputs
+        progress_head = output_dict.pop('progress_head', None)
+
         keys = output_dict.keys()
         for j in range(len(output_dict['outputs'])):
             out_dict = {key: output_dict[key][j].to(device) for key in keys}
             out_dict['name'] = inputs[j]
+            # Re-attach progress_head module (not per-video, shared)
+            if progress_head is not None:
+                out_dict['progress_head'] = progress_head
             l.append((out_dict, times[j]))
     return l

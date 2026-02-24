@@ -10,6 +10,46 @@ Both are optional, configurable via CLI argument.
 
 ---
 
+## Training Data Organization
+
+**Source:** `egoprocel.json`
+
+```json
+{
+  "BaconAndEggs.egtea": {
+    "handles": ["OP01-R03-BaconAndEggs", ...],
+    "hdl_actions": [["0", "30", "0", "6", ...], ...],
+    "hdl_start_times": [[0, 1075, 1148, ...], ...],
+    "hdl_end_times": [[1075, 1148, 1182, ...], ...]
+  }
+}
+```
+
+**Structure:** Each video is a sequence of segments:
+```
+Segment 0: frames 0-1075    → action '0' (background)
+Segment 1: frames 1075-1148 → action '30' (break_eggs)
+Segment 2: frames 1148-1182 → action '0' (background)
+...
+```
+
+**Important:** Action labels in JSON are **IDs** (strings like `'0'`, `'30'`), NOT names.
+- `'0'` = background (from `egoprocel-id2action.txt`)
+- `'30'` = break_eggs
+- etc.
+
+**Times dict passed to loss function:**
+```python
+times_dict = {
+    'step': ['0', '30', '0', '6', ...],      # Action IDs (NOT names!)
+    'start_frame': [0, 44, 47, 49, ...],     # Scaled to 1 FPS
+    'end_frame': [44, 47, 49, 53, ...],      # Scaled to 1 FPS
+    'name': 'OP01-R03-BaconAndEggs'
+}
+```
+
+---
+
 ## Step 0: Create Git Branch
 
 ```bash
@@ -26,7 +66,7 @@ git checkout -b progress_loss
 | `utils/parser_util.py` | Add `--progress_loss` argument |
 | `configs/generic_config.py` | Add `CONFIG.PROGRESS_LOSS` section |
 | `configs/entry_config.py` | Parse progress loss args into config |
-| `utils/tensorops.py` | Add 2 helper functions |
+| `utils/tensorops.py` | Add 2 helper functions + modify `get_trueprogress_per_action` |
 | `utils/loss_entry.py` | Add progress loss computation, modify signature |
 | `models/model_multiprong.py` | Add `ProgressHead` class, modify model |
 | `models/alignment_training_loop.py` | Pass `times` to loss fn, dual checkpoints |
@@ -99,11 +139,33 @@ if progress_loss_arg is not None:
 
 ---
 
-## Step 4: Add Helper Functions
+## Step 4: Add/Modify Helper Functions
 
 **File:** `utils/tensorops.py`
 
-Add after `get_cum_matrix` function (line 331):
+### 4a. Modify `get_trueprogress_per_action` to handle action IDs
+
+**IMPORTANT:** JSON uses action IDs ('0' for background), not names ('background', 'SIL').
+
+```python
+def get_trueprogress_per_action(time_dict):
+    """Each action goes 0->1 independently"""
+    # '0' is the action ID for 'background' in egoprocel.json
+    BACKGROUND_LABELS = ['0', 'SIL', 'background']
+    N = time_dict['end_frame'][-1] + 1
+    progress = torch.zeros(N)
+
+    for step, start, end in zip(time_dict['step'], time_dict['start_frame'], time_dict['end_frame']):
+        if step not in BACKGROUND_LABELS:
+            segment_length = end - start + 1
+            progress[start:end+1] = torch.arange(1, segment_length + 1, dtype=torch.float) / segment_length
+        else:
+            progress[start:end+1] = 0
+
+    return progress
+```
+
+### 4b. Add `get_normalized_predicted_progress_action`
 
 ```python
 def get_normalized_predicted_progress_action(features, time_dict):
@@ -112,6 +174,8 @@ def get_normalized_predicted_progress_action(features, time_dict):
     Cumulative L2 distance resets at each action boundary.
     SIL/background segments get progress = 0.
     """
+    # '0' is the action ID for 'background' in egoprocel.json
+    BACKGROUND_LABELS = ['0', 'SIL', 'background']
     T = features.shape[0]
     pred_progress = torch.zeros(T, device=features.device)
 
@@ -121,7 +185,7 @@ def get_normalized_predicted_progress_action(features, time_dict):
         start = max(0, min(start, T - 1))
         end = max(0, min(end, T - 1))
 
-        if step in ['SIL', 'background']:
+        if step in BACKGROUND_LABELS:
             pred_progress[start:end+1] = 0
         else:
             segment_features = features[start:end+1]
@@ -137,21 +201,24 @@ def get_normalized_predicted_progress_action(features, time_dict):
                     pred_progress[start:end+1] = torch.linspace(0, 1, seg_len, device=features.device)
 
     return pred_progress
+```
 
+### 4c. Add `sample_action_segment_with_random_index`
 
+```python
 def sample_action_segment_with_random_index(embeddings, times_dict, min_segment_len=3):
     """
     Sample a random segment within a random non-SIL action.
     Returns segment embeddings up to random target index and GT progress.
     """
-    import random
-
+    # '0' is the action ID for 'background' in egoprocel.json
+    BACKGROUND_LABELS = ['0', 'SIL', 'background']
     valid_actions = []
     for idx, (step, start, end) in enumerate(zip(
         times_dict['step'], times_dict['start_frame'], times_dict['end_frame']
     )):
         action_length = end - start + 1
-        if step not in ['SIL', 'background'] and action_length >= min_segment_len:
+        if step not in BACKGROUND_LABELS and action_length >= min_segment_len:
             valid_actions.append((idx, step, start, end))
 
     if len(valid_actions) == 0:
@@ -185,7 +252,7 @@ def sample_action_segment_with_random_index(embeddings, times_dict, min_segment_
 
 **File:** `models/model_multiprong.py`
 
-Add after line 141 (before `class MultiProngAttDropoutModel`):
+Add before `class MultiProngAttDropoutModel`:
 
 ```python
 class ProgressHead(nn.Module):
@@ -233,7 +300,7 @@ class ProgressHead(nn.Module):
 
 **File:** `models/model_multiprong.py`
 
-Modify `__init__` signature (line 144) to add:
+Modify `__init__` signature to add:
 ```python
 def __init__(
     self,
@@ -249,7 +316,7 @@ def __init__(
 ):
 ```
 
-Add after dropout initialization (after line 177):
+Add after dropout initialization:
 ```python
         # Progress head (for learnable progress loss)
         self.use_progress_head = use_progress_head
@@ -261,7 +328,7 @@ Add after dropout initialization (after line 177):
             )
 ```
 
-Modify `forward` return (line 199-202):
+Modify `forward` return:
 ```python
         result = {'outputs': outputs, 'attentions': attentions}
         if self.dropping:
@@ -293,17 +360,17 @@ Modify `get_loss_function` signature:
 def get_loss_function(config_obj, num_epochs=None):
 ```
 
-Add after line 13 (after VAVA_PARAMS):
+Add after VAVA_PARAMS:
 ```python
     PROGRESS_CONFIG = getattr(config_obj, 'PROGRESS_LOSS', {'enabled': False})
 ```
 
-Modify `_alignment_loss_fn` signature (line 14):
+Modify `_alignment_loss_fn` signature:
 ```python
     def _alignment_loss_fn(output_dict_list, epoch, times=None):
 ```
 
-Add after line 27 (after initializing loss_return_dict):
+Add after initializing loss_return_dict:
 ```python
         # Track alignment loss separately for dual checkpoints
         loss_return_dict['alignment_loss'] = torch.tensor(0).float().to(device)
@@ -311,12 +378,12 @@ Add after line 27 (after initializing loss_return_dict):
             loss_return_dict['progress_loss'] = torch.tensor(0).float().to(device)
 ```
 
-Add inside the loop, after line 62 (after alignment loss):
+Add inside the loop, after alignment loss:
 ```python
                     loss_return_dict['alignment_loss'] += coefficient * specific_loss
 ```
 
-Add after the alignment loss loop (after line 63), before `return`:
+Add after the alignment loss loop, before `return`:
 ```python
             # Progress loss computation
             if PROGRESS_CONFIG.get('enabled', False) and times is not None:
@@ -372,24 +439,18 @@ Add after the alignment loss loop (after line 63), before `return`:
 
 **File:** `models/alignment_training_loop.py`
 
-**8a. Modify loss function call** (around line 342):
+**8a. Modify loss function call**:
 ```python
-# Before:
-loss_dict = loss_fn(output_dict, epoch)
-
-# After:
 loss_dict = loss_fn(output_dict, epoch, times=times)
 ```
 
-**8b. Add dual checkpoint tracking** (around line 252, after `best_val_loss = float('inf')`):
+**8b. Add dual checkpoint tracking**:
 ```python
 best_val_loss_combined = float('inf')
 best_val_loss_alignment = float('inf')
 ```
 
-**8c. Modify validation checkpoint saving** (around line 468-480):
-
-After getting val_loss, add dual checkpoint saving:
+**8c. Modify validation checkpoint saving**:
 ```python
 # Get alignment loss for dual checkpointing
 val_loss_combined = val_loss
@@ -422,7 +483,7 @@ if val_loss_alignment < best_val_loss_alignment:
     )
 ```
 
-**8d. Modify `run_validation_epoch`** (around line 649):
+**8d. Modify `run_validation_epoch`**:
 ```python
 loss_dict = loss_fn(output_dict, epoch, times=times)
 ```
@@ -433,7 +494,7 @@ loss_dict = loss_fn(output_dict, epoch, times=times)
 
 **File:** `multitask_train.py`
 
-Around line 202-210, modify model creation:
+Modify model creation:
 ```python
 # Determine if progress head is needed
 use_progress_head = (
@@ -454,47 +515,90 @@ model = MultiProngAttDropoutModel(
 )
 ```
 
-Update loss function call (around line 230):
+Update loss function call:
 ```python
 get_loss_function(CFG, num_epochs=CFG.NUM_EPOCHS)
 ```
 
 ---
 
-## Example Usage
+## Checkpoint Files Explained
 
-**Note:** All existing required flags (`--gtcc`/`--tcc`/etc., `--ego`/`--penn`/etc., `--resnet`/`--tstack`/etc., `--mcn`) must still be present. The `--progress_loss` flag is **additional** and optional.
+| Checkpoint | What it tracks | When to use |
+|------------|----------------|-------------|
+| `best_model.pt` | Best validation loss (legacy) | Backwards compatibility |
+| `best_model_combined.pt` | Best total loss (alignment + λ*progress) | When you want model optimized for both objectives |
+| `best_model_alignment.pt` | Best alignment-only loss | **For evaluation** - alignment metrics are what we care about |
 
-```bash
-# No progress loss (default, unchanged behavior)
-python multitask_train.py 1 --gtcc --ego --resnet --mcn
+**Note:** Currently, loss plots show **combined loss** only.
 
-# Cumulative L2 progress loss (action-level) with GTCC
-python multitask_train.py 1 --gtcc --ego --resnet --mcn \
-    --progress_loss cumulative_l2 --progress_lambda 0.1
+---
 
-# Learnable progress head (action-level) with GTCC
-python multitask_train.py 1 --gtcc --ego --resnet --mcn \
-    --progress_loss learnable --progress_lambda 0.1
+## Progress Loss Flow
 
-# Works with other loss types too (e.g., TCC)
-python multitask_train.py 1 --tcc --ego --resnet --mcn \
-    --progress_loss cumulative_l2 --progress_lambda 0.1
+### Cumulative L2 Method
 
-# Works with different architectures (e.g., temporal_stacking)
-python multitask_train.py 1 --gtcc --ego --tstack --mcn \
-    --progress_loss learnable --progress_lambda 0.1
+```
+1. Pick ONE random video from batch
+2. For each action segment (skip background '0'):
+   - Extract segment features
+   - Compute cumulative L2 distance from segment start
+   - Normalize by max distance → predicted progress [0, 1]
+3. Ground truth: linear progress within each action
+4. Pick ONE random frame, compute |pred - gt|
+5. Add λ * loss to total_loss
+```
+
+### Learnable Head Method
+
+```
+1. Pick ONE random video from batch
+2. Pick ONE random non-background action
+3. Pick random segment [seg_start, seg_end] within action
+4. Pick random target frame within segment
+5. Extract embeddings from seg_start to target_idx
+6. Pass through GRU → MLP → Sigmoid → predicted progress
+7. GT = (target_idx - action_start + 1) / action_length
+8. Loss = |pred - gt|
+9. Add λ * loss to total_loss
 ```
 
 ---
 
-## Verification Steps
+## Example Usage
 
-1. **Without progress loss**: Run training without `--progress_loss` flag, verify unchanged behavior
-2. **Cumulative L2**: Run with `--progress_loss cumulative_l2`, verify `progress_loss` in logs
-3. **Learnable head**: Run with `--progress_loss learnable`, verify progress head is created
-4. **Checkpoints**: Verify both `best_model_combined.pt` and `best_model_alignment.pt` are saved
-5. **Gradient flow**: Verify gradients flow through progress head (learnable method)
+```bash
+# Set output path
+export OUTPUT_PATH=/vision/anishn/GTCC_CVPR2024/output_learnable_progress
+
+# GTCC with learnable progress loss
+CUDA_VISIBLE_DEVICES=6 python multitask_train.py 1 --gtcc --ego --resnet --mcn --progress_loss learnable --progress_lambda 0.1
+
+# TCC with learnable progress loss
+CUDA_VISIBLE_DEVICES=7 python multitask_train.py 1 --tcc --ego --resnet --mcn --progress_loss learnable --progress_lambda 0.1
+
+# GTCC with cumulative L2 progress loss
+CUDA_VISIBLE_DEVICES=0 python multitask_train.py 1 --gtcc --ego --resnet --mcn --progress_loss cumulative_l2 --progress_lambda 0.1
+
+# No progress loss (default, unchanged behavior)
+python multitask_train.py 1 --gtcc --ego --resnet --mcn
+```
+
+---
+
+## Key Bug Fix: Background Label Detection
+
+**Problem:** JSON stores action IDs (`'0'` for background), but original code checked for names (`'SIL'`, `'background'`).
+
+**Solution:** All background checks now use:
+```python
+BACKGROUND_LABELS = ['0', 'SIL', 'background']
+```
+
+This affects:
+- `get_trueprogress_per_action()`
+- `get_normalized_predicted_progress_action()`
+- `sample_action_segment_with_random_index()`
 
 ---
 
@@ -505,7 +609,7 @@ python multitask_train.py 1 --gtcc --ego --tstack --mcn \
 | `utils/parser_util.py` | CLI argument `--progress_loss` |
 | `configs/generic_config.py` | `CONFIG.PROGRESS_LOSS` defaults |
 | `configs/entry_config.py` | Parse CLI args to config |
-| `utils/tensorops.py` | `get_normalized_predicted_progress_action`, `sample_action_segment_with_random_index` |
+| `utils/tensorops.py` | `get_normalized_predicted_progress_action`, `sample_action_segment_with_random_index`, modified `get_trueprogress_per_action` |
 | `utils/loss_entry.py` | Progress loss computation, modified `_alignment_loss_fn(output_dict_list, epoch, times=None)` |
 | `models/model_multiprong.py` | `ProgressHead` class, model integration |
 | `models/alignment_training_loop.py` | Pass times, dual checkpoints |

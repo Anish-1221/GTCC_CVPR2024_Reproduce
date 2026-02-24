@@ -199,6 +199,13 @@ if __name__ == '__main__':
         else:
             num_tks = CFG.ARCHITECTURE['num_heads']
         base_model_class, base_model_params = get_base_model_deets(CFG)
+
+        # Determine if progress head is needed
+        use_progress_head = (
+            CFG.PROGRESS_LOSS.get('enabled', False) and
+            CFG.PROGRESS_LOSS.get('method') == 'learnable'
+        )
+
         model = MultiProngAttDropoutModel(
             base_model_class=base_model_class,
             base_model_params=base_model_params,
@@ -207,6 +214,8 @@ if __name__ == '__main__':
             dropping=CFG.LOSS_TYPE['GTCC'],
             attn_layers=CFG.ARCHITECTURE['attn_layers'],
             drop_layers=CFG.ARCHITECTURE['drop_layers'],
+            use_progress_head=use_progress_head,
+            progress_head_config=CFG.PROGRESS_LOSS.get('learnable', {}) if use_progress_head else None,
         )
     else:
         base_model_class, base_model_params = get_base_model_deets(CFG)
@@ -227,7 +236,7 @@ if __name__ == '__main__':
     alignment_training_loop(
         model,
         train_dataloaders,
-        get_loss_function(CFG),
+        get_loss_function(CFG, num_epochs=CFG.NUM_EPOCHS),
         master_experiment_foldername,
         CONFIG=CFG,
         val_dl_dict=val_dataloaders,

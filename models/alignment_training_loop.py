@@ -1,4 +1,5 @@
 import json
+import math
 import random
 import time
 
@@ -250,6 +251,8 @@ def alignment_training_loop(
     epoch_losses_to_plot = []
     val_losses_to_plot = []
     best_val_loss = float('inf')
+    best_val_loss_combined = float('inf')
+    best_val_loss_alignment = float('inf')
     more_epochs_bool = True
 
     for epoch in range(num_epochs):
@@ -339,7 +342,7 @@ def alignment_training_loop(
             del inputs
 
             try:
-                loss_dict = loss_fn(output_dict, epoch)
+                loss_dict = loss_fn(output_dict, epoch, times=times)
                 print_memory_stats(f"After loss computation", local_rank)
 
                 if loss_dict is None or loss_dict['total_loss'] is None:
@@ -464,17 +467,55 @@ def alignment_training_loop(
 
             logger.info(f"Epoch [{epoch+1}/{num_epochs}], Val Loss: {val_loss:.4f}")
 
-            # Save checkpoint only if validation loss improved
-            if val_loss < best_val_loss:
+            # Get model to save
+            model_to_save = model.module if hasattr(model, 'module') else model
+
+            # Dual checkpoint system: track combined loss and alignment-only loss
+            val_loss_combined = val_loss
+            val_loss_alignment = val_loss  # Default: same as combined if no progress loss
+
+            # [NaN PROTECTION] Skip checkpoint saving if loss is NaN/Inf
+            def is_valid_loss(loss_val):
+                return loss_val is not None and not math.isnan(loss_val) and not math.isinf(loss_val)
+
+            # Save checkpoint only if validation loss improved (original behavior)
+            if is_valid_loss(val_loss) and val_loss < best_val_loss:
                 best_val_loss = val_loss
                 logger.info(f"New best validation loss: {val_loss:.4f} - saving checkpoint")
-                model_to_save = model.module if hasattr(model, 'module') else model
                 ckpt_save(
                     model_t=model_to_save,
                     optimizer_t=optimizer,
                     epoch_t=epoch,
                     loss_t=val_loss,
                     filename=ckpt_folder + f'/best_model.pt',
+                    config=CONFIG
+                )
+            elif not is_valid_loss(val_loss):
+                logger.warning(f"[NaN DETECTED] val_loss={val_loss} - skipping checkpoint save")
+
+            # Save best combined model (alignment + progress)
+            if is_valid_loss(val_loss_combined) and val_loss_combined < best_val_loss_combined:
+                best_val_loss_combined = val_loss_combined
+                logger.info(f"New best COMBINED loss: {val_loss_combined:.4f}")
+                ckpt_save(
+                    model_t=model_to_save,
+                    optimizer_t=optimizer,
+                    epoch_t=epoch,
+                    loss_t=val_loss_combined,
+                    filename=ckpt_folder + '/best_model_combined.pt',
+                    config=CONFIG
+                )
+
+            # Save best alignment-only model
+            if is_valid_loss(val_loss_alignment) and val_loss_alignment < best_val_loss_alignment:
+                best_val_loss_alignment = val_loss_alignment
+                logger.info(f"New best ALIGNMENT loss: {val_loss_alignment:.4f}")
+                ckpt_save(
+                    model_t=model_to_save,
+                    optimizer_t=optimizer,
+                    epoch_t=epoch,
+                    loss_t=val_loss_alignment,
+                    filename=ckpt_folder + '/best_model_alignment.pt',
                     config=CONFIG
                 )
 
@@ -680,7 +721,7 @@ def run_validation_epoch(
                 output_dict = model(inputs)
 
                 # Compute loss
-                loss_dict = loss_fn(output_dict, epoch)
+                loss_dict = loss_fn(output_dict, epoch, times=times)
 
                 if loss_dict is not None and loss_dict['total_loss'] is not None:
                     loss = loss_dict['total_loss']

@@ -14,7 +14,16 @@ def prog_argparser():
     parser.add_argument('-bs', '--batch_size', default='2') 
     parser.add_argument('-ep', '--epochs', default='50') 
     parser.add_argument('-od', '--output_dimensions', default='128') 
-    parser.add_argument('-m', '--message', default=None) 
+    parser.add_argument('-m', '--message', default=None)
+
+    # Progress loss configuration
+    parser.add_argument('--progress_loss',
+        type=str,
+        default=None,
+        choices=['cumulative_l2', 'learnable'],
+        help='Progress loss method (action-level). Options: cumulative_l2, learnable')
+    parser.add_argument('--progress_lambda', type=float, default=0.1,
+        help='Progress loss coefficient')
 
     # Create a mutually exclusive group for the METHOD/LOSS
     loss_type = parser.add_mutually_exclusive_group(required=True)
@@ -51,4 +60,6 @@ def prog_argparser():
         'epochs': args.epochs,
         'output_dimensions': args.output_dimensions,
         'debug': args.debug,
+        'progress_loss': args.progress_loss,
+        'progress_lambda': args.progress_lambda,
     }

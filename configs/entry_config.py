@@ -88,6 +88,13 @@ def get_generic_config(multi_task_setting=False, delta=None, n_components=None):
     CONFIG.NUM_EPOCHS = int(epochs)
     CONFIG.OUTPUT_DIMENSIONALITY = int(output_dimensions)
 
+    # Progress loss configuration
+    progress_loss_arg = args_given.get('progress_loss', None)
+    if progress_loss_arg is not None:
+        CONFIG.PROGRESS_LOSS['enabled'] = True
+        CONFIG.PROGRESS_LOSS['method'] = progress_loss_arg
+        CONFIG.PROGRESS_LOSS['lambda_fixed'] = float(args_given.get('progress_lambda', 0.1))
+
     # output folders related items
     CONFIG.EVAL_PLOTFOLDER = f'{output_path}/{output_foldername}'
     CONFIG.VERSION = version

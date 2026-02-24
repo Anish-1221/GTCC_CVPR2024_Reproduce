@@ -63,6 +63,19 @@ CONFIG.VAVA_PARAMS = {
 }
 
 ######################
+## Progress Loss Configuration
+CONFIG.PROGRESS_LOSS = edict({
+    'enabled': False,
+    'method': 'cumulative_l2',      # 'cumulative_l2' or 'learnable'
+    'lambda_fixed': 0.1,
+    'learnable': {
+        'hidden_dim': 64,
+        'use_gru': True,
+        'min_segment_len': 3,
+    },
+})
+
+######################
 ## global parameters
 CONFIG.SKIP_RATE = None
 CONFIG.MULTITASK = False

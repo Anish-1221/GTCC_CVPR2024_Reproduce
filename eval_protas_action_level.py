@@ -28,37 +28,38 @@ logger = configure_logging_format()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Paths
-WHITELIST_PATH = '/vision/anishn/GTCC_CVPR2024/evaluation_video_whitelist.json'
+DATA_SPLITS_PATH = '/vision/anishn/GTCC_CVPR2024/data_splits.json'  # GTCC train/val/test splits
 EGOPROCEL_JSON_PATH = '/vision/anishn/GTCC_CVPR2024/dset_jsons/egoprocel.json'
 PROTAS_BASE = '/vision/anishn/ProTAS/data_1fps/'
-OUTPUT_FOLDER = '/vision/anishn/GTCC_CVPR2024/output/multi-task-setting/protas_eval_egoprocel_act_level_2'
+OUTPUT_FOLDER = '/vision/anishn/GTCC_CVPR2024/output_protas_eval'
 
 # Per-subset configuration
 # Each subset has different num_classes and its own trained model
+# Model paths point to protas_gtcc_splits_2048d experiment
 SUBSET_CONFIGS = {
     'egoprocel_subset1_S': {
         'num_classes': 30,
-        'model_path': '/u/anishn/models/egoprocel_subset1_S_1fps/egoprocel_subset1_S/split_1/epoch-50.model',
+        'model_path': '/u/anishn/models/protas_gtcc_splits_2048d/egoprocel_subset1_S/split_1/epoch-50.model',
         'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset1_S/graph/graph.pkl',
     },
     'egoprocel_subset2_OP_P': {
         'num_classes': 50,
-        'model_path': '/u/anishn/models/egoprocel_subset2_OP_P_1fps/egoprocel_subset2_OP_P/split_1/epoch-50.model',
+        'model_path': '/u/anishn/models/protas_gtcc_splits_2048d/egoprocel_subset2_OP_P/split_1/epoch-50.model',
         'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset2_OP_P/graph/graph.pkl',
     },
     'egoprocel_subset3_tent': {
         'num_classes': 12,
-        'model_path': '/u/anishn/models/egoprocel_subset3_tent_1fps/egoprocel_subset3_tent/split_1/epoch-50.model',
+        'model_path': '/u/anishn/models/protas_gtcc_splits_2048d/egoprocel_subset3_tent/split_1/epoch-50.model',
         'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset3_tent/graph/graph.pkl',
     },
     'egoprocel_subset4_numbers': {
         'num_classes': 18,
-        'model_path': '/u/anishn/models/egoprocel_subset4_numbers_1fps/egoprocel_subset4_numbers/split_1/epoch-50.model',
+        'model_path': '/u/anishn/models/protas_gtcc_splits_2048d/egoprocel_subset4_numbers/split_1/epoch-50.model',
         'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset4_numbers/graph/graph.pkl',
     },
     'egoprocel_subset5_head': {
         'num_classes': 19,
-        'model_path': '/u/anishn/models/egoprocel_subset5_head_1fps/egoprocel_subset5_head/split_1/epoch-50.model',
+        'model_path': '/u/anishn/models/protas_gtcc_splits_2048d/egoprocel_subset5_head/split_1/epoch-50.model',
         'graph_path': '/vision/anishn/ProTAS/data_1fps/egoprocel_subset5_head/graph/graph.pkl',
     },
 }
@@ -279,41 +280,24 @@ def main():
     logger.info("=" * 60)
     logger.info("Action-Level OGPE Evaluation for ProTAS")
     logger.info("Results organized by TASK (matching GTCC format)")
+    logger.info("Using GTCC data_splits.json test videos")
     logger.info("=" * 60)
 
-    # Load whitelist
-    with open(WHITELIST_PATH, 'r') as f:
-        whitelist_data = json.load(f)
-    video_whitelist = set(whitelist_data['video_names'])
-    logger.info(f"[INFO] Test set whitelist: {len(video_whitelist)} videos")
+    # Load test videos directly from data_splits.json
+    with open(DATA_SPLITS_PATH, 'r') as f:
+        splits_data = json.load(f)
 
-    # Load egoprocel.json to get task structure (same as GTCC uses)
-    with open(EGOPROCEL_JSON_PATH, 'r') as f:
-        egoprocel_data = json.load(f)
-
-    # Create video -> task mapping
-    video_to_task = {}
-    for task, task_data in egoprocel_data.items():
-        for handle in task_data['handles']:
-            video_to_task[handle] = task
-    logger.info(f"[INFO] Loaded {len(video_to_task)} video-to-task mappings from egoprocel.json")
-
-    # Group whitelist videos by task
+    # Get test videos grouped by task directly from splits
     task_videos = {}
-    unmapped_videos = []
-    for video_name in video_whitelist:
-        task = video_to_task.get(video_name)
-        if task:
-            if task not in task_videos:
-                task_videos[task] = []
-            task_videos[task].append(video_name)
-        else:
-            unmapped_videos.append(video_name)
+    total_test_videos = 0
+    for task, task_splits in splits_data['splits'].items():
+        test_videos = task_splits.get('test', [])
+        if test_videos:
+            task_videos[task] = test_videos
+            total_test_videos += len(test_videos)
 
-    if unmapped_videos:
-        logger.warning(f"[WARNING] {len(unmapped_videos)} videos not mapped to any task: {unmapped_videos[:5]}...")
-
-    logger.info(f"[INFO] Found {len(task_videos)} tasks with whitelist videos")
+    logger.info(f"[INFO] Loaded {total_test_videos} test videos from data_splits.json")
+    logger.info(f"[INFO] Found {len(task_videos)} tasks with test videos")
 
     # Results storage (matching GTCC format)
     results = {'task': [], 'ogpe': [], 'CoV': [], 'num_videos': []}
