@@ -144,11 +144,15 @@ def get_loss_function(config_obj, num_epochs=None):
                     progress_head = output_dict['progress_head']
                     learnable_config = PROGRESS_CONFIG.get('learnable', {})
                     min_seg_len = learnable_config.get('min_segment_len', 3)
-                    samples_per_video = learnable_config.get('samples_per_video', 5)
-                    frames_per_segment = learnable_config.get('frames_per_segment', 3)
+                    samples_per_video = learnable_config.get('samples_per_video', 10)
+                    frames_per_segment = learnable_config.get('frames_per_segment', 5)
+                    use_stratified = learnable_config.get('stratified_sampling', True)
+                    use_weighted_loss = learnable_config.get('weighted_loss', True)
+                    weight_cap = learnable_config.get('weight_cap', 10.0)
 
                     if len(output_dict['outputs']) > 0:
                         total_progress_loss = 0.0
+                        total_weight = 0.0
                         num_samples = 0
 
                         # Process ALL videos in the batch
@@ -163,7 +167,8 @@ def get_loss_function(config_obj, num_epochs=None):
                                 frame_samples = sample_action_segment_with_multiple_frames(
                                     vid_emb, times[vid_idx],
                                     min_segment_len=min_seg_len,
-                                    frames_per_segment=frames_per_segment
+                                    frames_per_segment=frames_per_segment,
+                                    stratified=use_stratified
                                 )
 
                                 # Process each target frame within the segment
@@ -171,13 +176,27 @@ def get_loss_function(config_obj, num_epochs=None):
                                     if seg_emb is not None and seg_emb.shape[0] >= 2:
                                         pred_prog = progress_head(seg_emb)
                                         gt_tensor = torch.tensor(gt_prog, device=pred_prog.device, dtype=pred_prog.dtype)
-                                        p_loss = torch.abs(pred_prog - gt_tensor)
+
+                                        # Weighted loss: penalize early frame errors more heavily
+                                        # Early frames (low gt_prog) get higher weight
+                                        if use_weighted_loss:
+                                            # Weight = 1 / gt_prog, capped to prevent instability
+                                            weight = 1.0 / max(gt_prog, 1.0 / weight_cap)
+                                            weight = min(weight, weight_cap)
+                                        else:
+                                            weight = 1.0
+
+                                        p_loss = weight * torch.abs(pred_prog - gt_tensor)
                                         total_progress_loss = total_progress_loss + p_loss
+                                        total_weight += weight
                                         num_samples += 1
 
-                        # Average the progress loss over all samples
+                        # Average the progress loss over all samples (weighted average)
                         if num_samples > 0:
-                            avg_progress_loss = total_progress_loss / num_samples
+                            if use_weighted_loss and total_weight > 0:
+                                avg_progress_loss = total_progress_loss / total_weight
+                            else:
+                                avg_progress_loss = total_progress_loss / num_samples
                             loss_return_dict['progress_loss'] += avg_progress_loss
                             loss_return_dict['total_loss'] += progress_lambda * avg_progress_loss
 

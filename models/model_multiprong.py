@@ -143,16 +143,27 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class ProgressHead(nn.Module):
     """
-    Learnable progress prediction head.
+    Learnable progress prediction head with position encoding and learnable h0.
+
+    Improvements over original (see ProgressIssues2.md):
+    - Position encoding: Concatenates normalized frame index to embeddings
+      This tells the GRU "where" it is in the sequence (frame 1/T vs frame T/T)
+    - Learnable h0: Learns initial hidden state instead of zero-init
+      This reduces the Sigmoid bias toward 0.5 at early frames
+
     Takes segment embeddings and predicts progress at the final frame.
     """
     def __init__(self, input_dim=128, hidden_dim=64, use_gru=True):
         super(ProgressHead, self).__init__()
         self.use_gru = use_gru
+        self.input_dim = input_dim
 
         if use_gru:
-            self.gru = nn.GRU(input_dim, hidden_dim, num_layers=1,
+            # +1 for position encoding
+            self.gru = nn.GRU(input_dim + 1, hidden_dim, num_layers=1,
                               batch_first=True, bidirectional=False)
+            # Learnable initial hidden state
+            self.h0 = nn.Parameter(torch.zeros(1, 1, hidden_dim))
             self.fc = nn.Sequential(
                 nn.Linear(hidden_dim, 32),
                 nn.ReLU(),
@@ -160,8 +171,9 @@ class ProgressHead(nn.Module):
                 nn.Sigmoid()
             )
         else:
+            # +1 for position encoding (mean-pooled position)
             self.fc = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
+                nn.Linear(input_dim + 1, hidden_dim),
                 nn.ReLU(),
                 nn.Linear(hidden_dim, 32),
                 nn.ReLU(),
@@ -170,12 +182,21 @@ class ProgressHead(nn.Module):
             )
 
     def forward(self, segment_embeddings):
+        T = segment_embeddings.shape[0]
+        device = segment_embeddings.device
+
+        # Position encoding: normalized frame index (0 to ~1)
+        # For T frames: positions = [0, 1/T, 2/T, ..., (T-1)/T]
+        positions = torch.arange(T, device=device, dtype=torch.float32) / max(T, 1)
+        positions = positions.unsqueeze(1)  # (T, 1)
+        x = torch.cat([segment_embeddings, positions], dim=1)  # (T, D+1)
+
         if self.use_gru:
-            x = segment_embeddings.unsqueeze(0)  # (1, T, D)
-            _, h_n = self.gru(x)                  # h_n: (1, 1, hidden_dim)
+            x = x.unsqueeze(0)  # (1, T, D+1)
+            _, h_n = self.gru(x, self.h0)  # Use learnable h0 instead of zeros
             progress = self.fc(h_n.squeeze())
         else:
-            x = segment_embeddings.mean(dim=0)    # Mean pool: (D,)
+            x = x.mean(dim=0)  # Mean pool: (D+1,)
             progress = self.fc(x)
         return progress.squeeze()
 

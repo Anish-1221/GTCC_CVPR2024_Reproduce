@@ -52,8 +52,12 @@ def ckpt_restore_mprong(path, num_heads, dropout=False, device='cpu'):
     base_model_class, base_model_params = get_base_model_deets(config_obj)
 
     # [LEARNABLE PROGRESS] Detect if checkpoint has progress_head
+    # Check for both regular keys and DDP-wrapped keys (with 'module.' prefix)
     state_dict = checkpoint['model_state_dict']
-    has_progress_head = any(k.startswith('progress_head.') for k in state_dict.keys())
+    has_progress_head = any(
+        k.startswith('progress_head.') or k.startswith('module.progress_head.')
+        for k in state_dict.keys()
+    )
 
     # Build progress_head_config if needed
     progress_head_config = None

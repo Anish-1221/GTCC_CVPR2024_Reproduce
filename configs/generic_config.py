@@ -72,8 +72,11 @@ CONFIG.PROGRESS_LOSS = edict({
         'hidden_dim': 64,
         'use_gru': True,
         'min_segment_len': 3,
-        'samples_per_video': 5,      # Number of segments to sample per video
-        'frames_per_segment': 3,     # Number of target frames per segment
+        'samples_per_video': 10,     # Number of segments to sample per video (was 5)
+        'frames_per_segment': 5,     # Number of target frames per segment (was 3)
+        'stratified_sampling': True, # Ensure early/mid/late parts of actions are covered
+        'weighted_loss': True,       # Weight early frame errors more heavily
+        'weight_cap': 10.0,          # Maximum weight for early frames (prevents instability)
     },
 })
 

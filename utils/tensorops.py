@@ -408,10 +408,17 @@ def sample_action_segment_with_random_index(embeddings, times_dict, min_segment_
     return segment_embeddings, gt_progress, action_name
 
 
-def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segment_len=3, frames_per_segment=3):
+def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segment_len=3, frames_per_segment=3, stratified=False):
     """
     Sample a random non-SIL action, then sample multiple target frames within that action.
     For each target frame, return embeddings from action_start to target_frame.
+
+    Args:
+        embeddings: Video embeddings tensor (T, D)
+        times_dict: Dictionary with 'step', 'start_frame', 'end_frame' lists
+        min_segment_len: Minimum frames needed for a valid segment
+        frames_per_segment: Number of target frames to sample
+        stratified: If True, ensure samples from early (0-0.33), mid (0.33-0.67), late (0.67-1.0) parts
 
     Returns list of (segment_embeddings, gt_progress) tuples for each target frame.
     - segment_embeddings: embeddings[action_start : target_frame+1]
@@ -437,8 +444,7 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
     action_end = max(action_start, min(action_end, T - 1))
     action_length = action_end - action_start + 1
 
-    # Sample multiple target frames within the action [action_start, action_end]
-    # Ensure target is at least min_segment_len frames from action_start
+    # Minimum target: at least min_segment_len frames from action_start
     min_target = action_start + min_segment_len - 1
     if min_target > action_end:
         min_target = action_start + 1  # Fallback: at least 2 frames
@@ -447,8 +453,42 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
     if len(possible_targets) == 0:
         return []
 
-    num_frames = min(frames_per_segment, len(possible_targets))
-    target_indices = random.sample(possible_targets, num_frames)
+    if stratified and len(possible_targets) >= 3:
+        # Stratified sampling: ensure coverage of early, mid, late parts
+        # Split possible targets into three bins based on progress value
+        early_targets = []  # progress 0.0 - 0.33
+        mid_targets = []    # progress 0.33 - 0.67
+        late_targets = []   # progress 0.67 - 1.0
+
+        for t in possible_targets:
+            progress = (t - action_start + 1) / action_length
+            if progress <= 0.33:
+                early_targets.append(t)
+            elif progress <= 0.67:
+                mid_targets.append(t)
+            else:
+                late_targets.append(t)
+
+        # Sample from each bin proportionally
+        target_indices = []
+        samples_per_bin = max(1, frames_per_segment // 3)
+
+        for bin_targets in [early_targets, mid_targets, late_targets]:
+            if bin_targets:
+                n = min(samples_per_bin, len(bin_targets))
+                target_indices.extend(random.sample(bin_targets, n))
+
+        # Fill remaining slots randomly from all targets
+        remaining = frames_per_segment - len(target_indices)
+        if remaining > 0:
+            remaining_targets = [t for t in possible_targets if t not in target_indices]
+            if remaining_targets:
+                n = min(remaining, len(remaining_targets))
+                target_indices.extend(random.sample(remaining_targets, n))
+    else:
+        # Random sampling (original behavior)
+        num_frames = min(frames_per_segment, len(possible_targets))
+        target_indices = random.sample(possible_targets, num_frames)
 
     results = []
     for target_idx in target_indices:

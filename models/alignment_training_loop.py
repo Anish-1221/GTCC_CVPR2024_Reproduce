@@ -367,15 +367,17 @@ def alignment_training_loop(
             loss = loss_dict['total_loss']
 
             # [FIX] Skip batches with extreme loss to prevent weight corruption
+            # Only applies to GTCC - LAV/VAVA have naturally higher loss values
             # Normal GTCC loss is ~40k-250k. Values > 1e7 indicate numerical instability.
-            MAX_SAFE_LOSS = 1e7
-            if loss.item() > MAX_SAFE_LOSS:
-                logger.warning(f"[EXTREME LOSS] {loss.item():.2e} > {MAX_SAFE_LOSS:.2e} - skipping batch to protect weights")
-                del output_dict, loss_dict, loss
-                gc.collect()
-                torch.cuda.empty_cache()
-                skipped_exception += 1
-                continue
+            if loss_type == 'GTCC':
+                MAX_SAFE_LOSS = 1e7
+                if loss.item() > MAX_SAFE_LOSS:
+                    logger.warning(f"[EXTREME LOSS] {loss.item():.2e} > {MAX_SAFE_LOSS:.2e} - skipping batch to protect weights")
+                    del output_dict, loss_dict, loss
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    skipped_exception += 1
+                    continue
 
             if contains_non_float_values(loss):
                 logger.error(f'Loss was NAN! exiting now')
