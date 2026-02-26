@@ -304,7 +304,17 @@ class OnlineGeoProgressError:
             if use_learnable_progress:
                 train_cum_means = {task: 1.0}  # Placeholder, not used
                 train_cum_vars = {task: 0.0}
+            elif action_means is not None:
+                # [4FPS FIX] Skip expensive get_average_train_cum_distance when action_means.json exists
+                # action_means provides per-action normalization; train_cum_means is only a fallback
+                # For 4fps models, this avoids loading 2-3GB files that cause OOM
+                all_means = [v['mean'] for v in action_means.values() if v['mean'] > 0]
+                fallback_mean = sum(all_means) / len(all_means) if all_means else 1.0
+                train_cum_means = {task: fallback_mean}
+                train_cum_vars = {task: 0.0}
+                print(f"[INFO] Using action_means.json (4fps={is_4fps}) - skipped get_average_train_cum_distance")
             else:
+                # Original behavior when no action_means.json
                 if os.path.isdir(testfolder + '/ckpt'):
                     train_cum_means, train_cum_vars = get_average_train_cum_distance(
                         model, testfolder, data_structure, targ_task=task, skip_rate=config_obj.SKIP_RATE

@@ -614,3 +614,151 @@ This affects:
 | `models/model_multiprong.py` | `ProgressHead` class, model integration |
 | `models/alignment_training_loop.py` | Pass times, dual checkpoints |
 | `multitask_train.py` | Wire config to model |
+
+---
+
+## UPDATE (v2) - February 2026
+
+### Key Changes
+
+| Change | Description |
+|--------|-------------|
+| **Data Augmentation** | Both methods now sample ALL videos in batch, multiple frames per video (~30 samples/batch) |
+| **Lambda = 1,000,000** | Alignment loss ~234k, progress loss ~0.3; high lambda balances them |
+| **Gradient Fix** | Progress head gradients divided by lambda after backward (unscaled learning) |
+| **Consistent Sampling** | Both methods use embeddings from action_start to target_frame |
+| **Loss Logging** | Logs alignment_loss and progress_loss separately per batch |
+
+---
+
+### Lambda Tuning
+
+**Empirical measurement (1 epoch):**
+```
+Alignment loss: ~234,000
+Progress loss:  ~0.29
+```
+
+**To balance:** `lambda = alignment_loss / progress_loss ≈ 800,000`
+
+**Recommended:** `lambda = 1,000,000` (slightly favors progress learning)
+
+With lambda=1M:
+- Encoder gradient from alignment: ~234,000
+- Encoder gradient from progress: ~290,000 (1M × 0.29)
+
+---
+
+### New Config Parameters
+
+```python
+CONFIG.PROGRESS_LOSS = edict({
+    'enabled': False,
+    'method': 'cumulative_l2',
+    'lambda_fixed': 1000000.0,      # Changed from 0.1
+    'learnable': {
+        'hidden_dim': 64,
+        'use_gru': True,
+        'min_segment_len': 3,
+        'samples_per_video': 5,      # NEW: actions to sample per video
+        'frames_per_segment': 3,     # NEW: target frames per action
+    },
+})
+```
+
+**Samples per batch (batch_size=2):** 2 videos × 5 actions × 3 frames = **30 samples**
+
+---
+
+### Gradient Flow Fix
+
+**Problem:** `total_loss = alignment + lambda * progress` causes progress_head to get `lambda * grad` instead of `grad`.
+
+**Solution (in `alignment_training_loop.py` after `loss.backward()`):**
+
+```python
+progress_config = getattr(CONFIG, 'PROGRESS_LOSS', {})
+if progress_config.get('enabled', False) and progress_config.get('method') == 'learnable':
+    progress_lambda = progress_config.get('lambda_fixed', 1.0)
+    model_to_check = model.module if hasattr(model, 'module') else model
+    if hasattr(model_to_check, 'progress_head') and progress_lambda != 1.0 and progress_lambda > 0:
+        for param in model_to_check.progress_head.parameters():
+            if param.grad is not None:
+                param.grad = param.grad / progress_lambda
+```
+
+**Result:**
+- Encoder: `grad(alignment) + lambda * grad(progress)` ✓
+- Progress head: `grad(progress)` (unscaled) ✓
+
+---
+
+### Updated Sampling Logic
+
+**Both methods now use action_start (not random sub-segment):**
+
+```python
+# Embeddings from action_start to target_frame
+segment_embeddings = embeddings[action_start : target_frame + 1]
+
+# GT progress
+gt_progress = (target_frame - action_start + 1) / action_length
+```
+
+**Cumulative L2:** `pred = cumL2(action_start → target) / cumL2(action_start → action_end)`
+
+**Learnable:** `pred = ProgressHead(embeddings[action_start : target + 1])`
+
+---
+
+### Loss Logging
+
+Each batch now logs both losses:
+
+```
+[BATCH 42] Loss: 520060.84 | Align: 233778.34 | Progress: 0.286283
+```
+
+---
+
+### v2 Training Commands
+
+**Learnable Progress (GPUs 4-7):**
+```bash
+export OUTPUT_PATH=/vision/anishn/GTCC_CVPR2024/output_learnable_progress_v2
+
+CUDA_VISIBLE_DEVICES=4 python multitask_train.py 1 --gtcc --egoprocel --resnet --mcn --progress_loss learnable --progress_lambda 1000000.0 -ep 50 -bs 2
+CUDA_VISIBLE_DEVICES=5 python multitask_train.py 1 --tcc --egoprocel --resnet --mcn --progress_loss learnable --progress_lambda 1000000.0 -ep 50 -bs 2
+CUDA_VISIBLE_DEVICES=6 python multitask_train.py 1 --lav --egoprocel --resnet --mcn --progress_loss learnable --progress_lambda 1000000.0 -ep 50 -bs 2
+CUDA_VISIBLE_DEVICES=7 python multitask_train.py 1 --vava --egoprocel --resnet --mcn --progress_loss learnable --progress_lambda 1000000.0 -ep 50 -bs 2
+```
+
+**Cumulative L2 Progress (GPUs 0-3):**
+```bash
+export OUTPUT_PATH=/vision/anishn/GTCC_CVPR2024/output_l2_progress_v2
+
+CUDA_VISIBLE_DEVICES=0 python multitask_train.py 1 --gtcc --egoprocel --resnet --mcn --progress_loss cumulative_l2 --progress_lambda 1000000.0 -ep 50 -bs 2
+CUDA_VISIBLE_DEVICES=1 python multitask_train.py 1 --tcc --egoprocel --resnet --mcn --progress_loss cumulative_l2 --progress_lambda 1000000.0 -ep 50 -bs 2
+CUDA_VISIBLE_DEVICES=2 python multitask_train.py 1 --lav --egoprocel --resnet --mcn --progress_loss cumulative_l2 --progress_lambda 1000000.0 -ep 50 -bs 2
+CUDA_VISIBLE_DEVICES=3 python multitask_train.py 1 --vava --egoprocel --resnet --mcn --progress_loss cumulative_l2 --progress_lambda 1000000.0 -ep 50 -bs 2
+```
+
+---
+
+### v2 Output Directories
+
+| Directory | Description |
+|-----------|-------------|
+| `output_learnable_progress_v2/` | Learnable with lambda=1M, data augmentation |
+| `output_l2_progress_v2/` | Cumulative L2 with lambda=1M, data augmentation |
+
+---
+
+### Files Modified in v2
+
+| File | Changes |
+|------|---------|
+| `configs/generic_config.py` | Added `samples_per_video`, `frames_per_segment` |
+| `utils/loss_entry.py` | Multi-sample loops, non-background filtering |
+| `utils/tensorops.py` | `sample_action_segment_with_multiple_frames()` uses action_start |
+| `models/alignment_training_loop.py` | Gradient rescaling, loss logging |

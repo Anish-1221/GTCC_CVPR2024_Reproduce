@@ -10,3 +10,7 @@ testVavaLoss1.log
 output_l2_progress
 output_learnable_progress
 output_protas_eval
+output_diagnostic
+output_diagnostic_progress
+output_l2_progress_v2
+output_learnable_progress_v2

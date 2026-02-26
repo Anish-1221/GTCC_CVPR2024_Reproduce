@@ -365,6 +365,18 @@ def alignment_training_loop(
                 continue
 
             loss = loss_dict['total_loss']
+
+            # [FIX] Skip batches with extreme loss to prevent weight corruption
+            # Normal GTCC loss is ~40k-250k. Values > 1e7 indicate numerical instability.
+            MAX_SAFE_LOSS = 1e7
+            if loss.item() > MAX_SAFE_LOSS:
+                logger.warning(f"[EXTREME LOSS] {loss.item():.2e} > {MAX_SAFE_LOSS:.2e} - skipping batch to protect weights")
+                del output_dict, loss_dict, loss
+                gc.collect()
+                torch.cuda.empty_cache()
+                skipped_exception += 1
+                continue
+
             if contains_non_float_values(loss):
                 logger.error(f'Loss was NAN! exiting now')
                 more_epochs_bool = False
@@ -374,7 +386,13 @@ def alignment_training_loop(
             train_loss_to_plot.append(loss.item())
 
             if local_rank == 0:
-                logger.info(f"[BATCH {i}] Loss: {loss.item():.4f}")
+                # Log total loss and breakdown if available
+                log_msg = f"[BATCH {i}] Loss: {loss.item():.4f}"
+                if 'alignment_loss' in loss_dict:
+                    log_msg += f" | Align: {loss_dict['alignment_loss'].item():.4f}"
+                if 'progress_loss' in loss_dict:
+                    log_msg += f" | Progress: {loss_dict['progress_loss'].item():.6f}"
+                logger.info(log_msg)
 
             # Backward pass
             try:
@@ -397,6 +415,19 @@ def alignment_training_loop(
                     skipped_exception += 1
                     continue
                 raise
+
+            # Fix: Rescale progress_head gradients to be unscaled by lambda
+            # After backward with (alignment + lambda * progress), progress_head has lambda * grad
+            # We divide by lambda so progress_head gets unscaled grad(progress)
+            # Encoder keeps: grad(alignment) + lambda * grad(progress)
+            progress_config = getattr(CONFIG, 'PROGRESS_LOSS', {})
+            if progress_config.get('enabled', False) and progress_config.get('method') == 'learnable':
+                progress_lambda = progress_config.get('lambda_fixed', 1.0)
+                model_to_check = model.module if hasattr(model, 'module') else model
+                if hasattr(model_to_check, 'progress_head') and progress_lambda != 1.0 and progress_lambda > 0:
+                    for param in model_to_check.progress_head.parameters():
+                        if param.grad is not None:
+                            param.grad = param.grad / progress_lambda
 
             del loss
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=.00001, norm_type=2)

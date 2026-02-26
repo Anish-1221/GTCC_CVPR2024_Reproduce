@@ -434,12 +434,12 @@ def GTCC_loss(
                     print("contains_non_float_values(tcc)")
                     print(set_of_vars)
                     print(set_of_mus)
-                    exit(1)
+                    raise ValueError("GTCC numerical instability: tcc contains non-float values")
                 align_loss = torch.inner(tcc, this_spread)
                 if contains_non_float_values(1/align_loss):
                     print("contains_non_float_values(1/align_loss)")
                     print(align_loss)
-                    exit(1)
+                    raise ValueError("GTCC numerical instability: 1/align_loss contains non-float values")
 
                 if gamma < 1:
                     tcc_loss_term = BX[t] * align_loss + (1-BX[t]) * (1 / align_loss)

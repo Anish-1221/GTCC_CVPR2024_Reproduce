@@ -72,6 +72,8 @@ CONFIG.PROGRESS_LOSS = edict({
         'hidden_dim': 64,
         'use_gru': True,
         'min_segment_len': 3,
+        'samples_per_video': 5,      # Number of segments to sample per video
+        'frames_per_segment': 3,     # Number of target frames per segment
     },
 })
 

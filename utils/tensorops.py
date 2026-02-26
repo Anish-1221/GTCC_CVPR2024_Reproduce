@@ -408,6 +408,62 @@ def sample_action_segment_with_random_index(embeddings, times_dict, min_segment_
     return segment_embeddings, gt_progress, action_name
 
 
+def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segment_len=3, frames_per_segment=3):
+    """
+    Sample a random non-SIL action, then sample multiple target frames within that action.
+    For each target frame, return embeddings from action_start to target_frame.
+
+    Returns list of (segment_embeddings, gt_progress) tuples for each target frame.
+    - segment_embeddings: embeddings[action_start : target_frame+1]
+    - gt_progress: (target_frame - action_start + 1) / action_length
+    """
+    BACKGROUND_LABELS = ['0', 'SIL', 'background']
+    valid_actions = []
+    for idx, (step, start, end) in enumerate(zip(
+        times_dict['step'], times_dict['start_frame'], times_dict['end_frame']
+    )):
+        action_length = end - start + 1
+        if step not in BACKGROUND_LABELS and action_length >= min_segment_len:
+            valid_actions.append((idx, step, start, end))
+
+    if len(valid_actions) == 0:
+        return []
+
+    _, action_name, action_start, action_end = random.choice(valid_actions)
+    action_length = action_end - action_start + 1
+
+    T = embeddings.shape[0]
+    action_start = max(0, min(action_start, T - 1))
+    action_end = max(action_start, min(action_end, T - 1))
+    action_length = action_end - action_start + 1
+
+    # Sample multiple target frames within the action [action_start, action_end]
+    # Ensure target is at least min_segment_len frames from action_start
+    min_target = action_start + min_segment_len - 1
+    if min_target > action_end:
+        min_target = action_start + 1  # Fallback: at least 2 frames
+
+    possible_targets = list(range(min_target, action_end + 1))
+    if len(possible_targets) == 0:
+        return []
+
+    num_frames = min(frames_per_segment, len(possible_targets))
+    target_indices = random.sample(possible_targets, num_frames)
+
+    results = []
+    for target_idx in target_indices:
+        # Embeddings from action_start to target_frame (inclusive)
+        segment_embeddings = embeddings[action_start:target_idx + 1]
+        if segment_embeddings.shape[0] < 2:
+            continue
+        # GT progress: how far into the action is this target frame
+        progress_at_target = (target_idx - action_start + 1) / action_length
+        gt_progress = min(1.0, max(0.0, progress_at_target))
+        results.append((segment_embeddings, gt_progress))
+
+    return results
+
+
 def flatten_dataloader_and_get_dict(model, dl, skip_rate=None, device='cpu'):
     l = []
     for i, (inputs, times) in enumerate(list(iter(dl))):
