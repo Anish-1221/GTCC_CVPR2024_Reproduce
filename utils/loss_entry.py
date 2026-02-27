@@ -148,24 +148,62 @@ def get_loss_function(config_obj, num_epochs=None):
                     frames_per_segment = learnable_config.get('frames_per_segment', 5)
                     use_stratified = learnable_config.get('stratified_sampling', True)
                     use_weighted_loss = learnable_config.get('weighted_loss', True)
-                    weight_cap = learnable_config.get('weight_cap', 10.0)
+                    weight_cap = learnable_config.get('weight_cap', 20.0)  # Increased from 10 to 20
+                    use_boundary_loss = learnable_config.get('boundary_loss', True)  # New: explicit boundary supervision
+                    boundary_weight = learnable_config.get('boundary_weight', 5.0)  # Weight for boundary loss
 
                     if len(output_dict['outputs']) > 0:
                         total_progress_loss = 0.0
                         total_weight = 0.0
                         num_samples = 0
+                        boundary_loss = 0.0
+                        num_boundary_samples = 0
 
                         # Process ALL videos in the batch
                         for vid_idx in range(len(output_dict['outputs'])):
                             if vid_idx >= len(times):
                                 continue
                             vid_emb = output_dict['outputs'][vid_idx]
+                            vid_times = times[vid_idx]
+
+                            # [BOUNDARY LOSS] Explicitly supervise first and last frames of actions
+                            if use_boundary_loss:
+                                BACKGROUND_LABELS = ['0', 'SIL', 'background']
+                                for step, start, end in zip(
+                                    vid_times['step'], vid_times['start_frame'], vid_times['end_frame']
+                                ):
+                                    if step in BACKGROUND_LABELS:
+                                        continue
+                                    action_len = end - start + 1
+                                    if action_len < 2:
+                                        continue
+
+                                    # Clamp to valid range
+                                    T = vid_emb.shape[0]
+                                    start = max(0, min(start, T - 1))
+                                    end = max(0, min(end, T - 1))
+
+                                    # First frame: predict with just 1 frame, target ≈ 1/action_len
+                                    first_emb = vid_emb[start:start+1]
+                                    if first_emb.shape[0] >= 1:
+                                        pred_first = progress_head(first_emb)
+                                        gt_first = 1.0 / action_len
+                                        boundary_loss += boundary_weight * torch.abs(pred_first - gt_first)
+                                        num_boundary_samples += 1
+
+                                    # Last frame: predict with full segment, target = 1.0
+                                    full_emb = vid_emb[start:end+1]
+                                    if full_emb.shape[0] >= 2:
+                                        pred_last = progress_head(full_emb)
+                                        gt_last = 1.0
+                                        boundary_loss += boundary_weight * torch.abs(pred_last - gt_last)
+                                        num_boundary_samples += 1
 
                             # Sample multiple segments per video (data augmentation)
                             for _ in range(samples_per_video):
                                 # Get multiple (segment, gt_progress) pairs for different target frames
                                 frame_samples = sample_action_segment_with_multiple_frames(
-                                    vid_emb, times[vid_idx],
+                                    vid_emb, vid_times,
                                     min_segment_len=min_seg_len,
                                     frames_per_segment=frames_per_segment,
                                     stratified=use_stratified
@@ -197,6 +235,12 @@ def get_loss_function(config_obj, num_epochs=None):
                                 avg_progress_loss = total_progress_loss / total_weight
                             else:
                                 avg_progress_loss = total_progress_loss / num_samples
+
+                            # Add boundary loss
+                            if use_boundary_loss and num_boundary_samples > 0:
+                                avg_boundary_loss = boundary_loss / num_boundary_samples
+                                avg_progress_loss = avg_progress_loss + avg_boundary_loss
+
                             loss_return_dict['progress_loss'] += avg_progress_loss
                             loss_return_dict['total_loss'] += progress_lambda * avg_progress_loss
 

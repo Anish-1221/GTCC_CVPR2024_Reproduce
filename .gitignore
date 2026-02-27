@@ -15,3 +15,5 @@ output_diagnostic_progress
 output_l2_progress_v2
 output_learnable_progress_v2
 output_learnable_progress_v3
+output_learnable_progress_v4
+output_learnable_progress_v5

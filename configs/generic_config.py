@@ -69,14 +69,40 @@ CONFIG.PROGRESS_LOSS = edict({
     'method': 'cumulative_l2',      # 'cumulative_l2' or 'learnable'
     'lambda_fixed': 0.1,
     'learnable': {
+        # Architecture selection: 'gru' (default), 'transformer', or 'dilated_conv'
+        'architecture': 'gru',
+
+        # GRU-specific config (used when architecture='gru')
         'hidden_dim': 64,
         'use_gru': True,
+        'use_position_encoding': False,  # V4+: disabled by default
+
+        # Transformer-specific config (used when architecture='transformer')
+        'transformer_config': {
+            'd_model': 64,
+            'num_heads': 4,
+            'num_layers': 2,
+            'ffn_dim': 128,
+            'dropout': 0.1,
+        },
+
+        # DilatedConv-specific config (used when architecture='dilated_conv')
+        'dilated_conv_config': {
+            'hidden_dim': 64,
+            'kernel_size': 3,
+            'dilations': [1, 2, 4, 8, 16, 32],
+            'dropout': 0.1,
+        },
+
+        # Training config (shared across all architectures)
         'min_segment_len': 3,
-        'samples_per_video': 10,     # Number of segments to sample per video (was 5)
-        'frames_per_segment': 5,     # Number of target frames per segment (was 3)
+        'samples_per_video': 10,     # Number of segments to sample per video
+        'frames_per_segment': 5,     # Number of target frames per segment
         'stratified_sampling': True, # Ensure early/mid/late parts of actions are covered
         'weighted_loss': True,       # Weight early frame errors more heavily
-        'weight_cap': 10.0,          # Maximum weight for early frames (prevents instability)
+        'weight_cap': 20.0,          # Maximum weight for early frames (increased from 10)
+        'boundary_loss': True,       # Explicit supervision for first/last frames of actions
+        'boundary_weight': 5.0,      # Weight multiplier for boundary loss
     },
 })
 

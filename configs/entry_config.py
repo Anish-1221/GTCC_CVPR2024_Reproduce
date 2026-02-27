@@ -95,6 +95,10 @@ def get_generic_config(multi_task_setting=False, delta=None, n_components=None):
         CONFIG.PROGRESS_LOSS['method'] = progress_loss_arg
         CONFIG.PROGRESS_LOSS['lambda_fixed'] = float(args_given.get('progress_lambda', 0.1))
 
+        # Set progress head architecture (only relevant for 'learnable' method)
+        progress_arch = args_given.get('progress_arch', 'gru')
+        CONFIG.PROGRESS_LOSS['learnable']['architecture'] = progress_arch
+
     # output folders related items
     CONFIG.EVAL_PLOTFOLDER = f'{output_path}/{output_foldername}'
     CONFIG.VERSION = version

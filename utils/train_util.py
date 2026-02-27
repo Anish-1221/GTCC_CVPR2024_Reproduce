@@ -62,11 +62,77 @@ def ckpt_restore_mprong(path, num_heads, dropout=False, device='cpu'):
     # Build progress_head_config if needed
     progress_head_config = None
     if has_progress_head:
-        # Default config - matches training setup
-        progress_head_config = {
-            'hidden_dim': 64,
-            'use_gru': True
-        }
+        # Detect architecture type from checkpoint keys
+        # - GRU-based: has 'progress_head.gru.*' keys
+        # - Transformer: has 'progress_head.layers.*' and 'progress_head.alibi_slopes'
+        # - DilatedConv: has 'progress_head.blocks.*' and 'progress_head.conv_dilated' patterns
+
+        def has_key_pattern(pattern):
+            return any(pattern in k for k in state_dict.keys())
+
+        # Check for architecture indicators (handle both regular and DDP keys)
+        has_transformer = has_key_pattern('progress_head.layers.') or has_key_pattern('module.progress_head.layers.')
+        has_dilated_conv = has_key_pattern('progress_head.blocks.') or has_key_pattern('module.progress_head.blocks.')
+        has_gru = has_key_pattern('progress_head.gru.') or has_key_pattern('module.progress_head.gru.')
+
+        if has_transformer:
+            # Transformer architecture detected
+            print(f"[INFO] Detected TransformerProgressHead - loading with ALiBi attention")
+            progress_head_config = {
+                'architecture': 'transformer',
+                'transformer_config': {
+                    'd_model': 64,
+                    'num_heads': 4,
+                    'num_layers': 2,
+                    'ffn_dim': 128,
+                    'dropout': 0.1,
+                }
+            }
+        elif has_dilated_conv:
+            # DilatedConv architecture detected
+            print(f"[INFO] Detected DilatedConvProgressHead - loading with causal dilated convolutions")
+            progress_head_config = {
+                'architecture': 'dilated_conv',
+                'dilated_conv_config': {
+                    'hidden_dim': 64,
+                    'kernel_size': 3,
+                    'dilations': [1, 2, 4, 8, 16, 32],
+                    'dropout': 0.1,
+                }
+            }
+        elif has_gru:
+            # GRU-based architecture - detect position encoding
+            gru_key = 'progress_head.gru.weight_ih_l0'
+            module_gru_key = 'module.progress_head.gru.weight_ih_l0'
+
+            use_position_encoding = False  # Default to no position encoding (V4+)
+            if gru_key in state_dict:
+                gru_input_dim = state_dict[gru_key].shape[1]
+                # If input_dim is output_dim + 1, it has position encoding
+                use_position_encoding = (gru_input_dim == config_obj['OUTPUT_DIMENSIONALITY'] + 1)
+            elif module_gru_key in state_dict:
+                gru_input_dim = state_dict[module_gru_key].shape[1]
+                use_position_encoding = (gru_input_dim == config_obj['OUTPUT_DIMENSIONALITY'] + 1)
+
+            progress_head_config = {
+                'architecture': 'gru',
+                'hidden_dim': 64,
+                'use_gru': True,
+                'use_position_encoding': use_position_encoding
+            }
+            if use_position_encoding:
+                print(f"[INFO] Detected GRU ProgressHead (v3) - loading with position encoding")
+            else:
+                print(f"[INFO] Detected GRU ProgressHead (v2/v4) - loading without position encoding")
+        else:
+            # Fallback: default GRU config
+            progress_head_config = {
+                'architecture': 'gru',
+                'hidden_dim': 64,
+                'use_gru': True,
+                'use_position_encoding': False
+            }
+            print(f"[INFO] Using default GRU ProgressHead configuration")
 
     if 'drop_layers' in config_obj['ARCHITECTURE'].keys():
         model = MultiProngAttDropoutModel(
