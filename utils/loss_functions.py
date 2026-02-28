@@ -392,16 +392,23 @@ def GTCC_loss(
             
             gmm = torch.zeros((ALPHA.shape[0], n_components, M)).to(device)
             spread = torch.zeros((ALPHA.shape[0], n_components)).to(device)
+            gmm_failed = False
             for u in range(ALPHA.shape[0]):
                 start = time.time()
                 g, s, _ = get_gmm_lfbgf(
                     ALPHA[u], n_components, max_iters=max_gmm_iters
                 )
+                if g is None or s is None:
+                    gmm_failed = True
+                    break
                 g = g.to(device)
                 s = s.to(device)
 
                 gmm[u] = g
                 spread[u] = s
+
+            if gmm_failed:
+                continue  # Skip this video pair due to GMM fitting failure
                 
             SNNs = (gmm @ secondary)
             prim_expanded = primary.unsqueeze(0)

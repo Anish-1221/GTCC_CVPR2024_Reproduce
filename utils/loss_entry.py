@@ -152,6 +152,11 @@ def get_loss_function(config_obj, num_epochs=None):
                     use_boundary_loss = learnable_config.get('boundary_loss', True)  # New: explicit boundary supervision
                     boundary_weight = learnable_config.get('boundary_weight', 5.0)  # Weight for boundary loss
 
+                    # Adaptive frames config (scale target frames by action length)
+                    use_adaptive_frames = learnable_config.get('adaptive_frames', True)
+                    min_target_frames = learnable_config.get('min_target_frames', 5)
+                    max_target_frames = learnable_config.get('max_target_frames', 30)
+
                     if len(output_dict['outputs']) > 0:
                         total_progress_loss = 0.0
                         total_weight = 0.0
@@ -167,8 +172,8 @@ def get_loss_function(config_obj, num_epochs=None):
                             vid_times = times[vid_idx]
 
                             # [BOUNDARY LOSS] Explicitly supervise first and last frames of actions
+                            BACKGROUND_LABELS = ['0', 'SIL', 'background']
                             if use_boundary_loss:
-                                BACKGROUND_LABELS = ['0', 'SIL', 'background']
                                 for step, start, end in zip(
                                     vid_times['step'], vid_times['start_frame'], vid_times['end_frame']
                                 ):
@@ -201,12 +206,16 @@ def get_loss_function(config_obj, num_epochs=None):
 
                             # Sample multiple segments per video (data augmentation)
                             for _ in range(samples_per_video):
-                                # Get multiple (segment, gt_progress) pairs for different target frames
+                                # Randomly pick an action and sample target frames
+                                # With adaptive_frames=True, num target frames scales with action length
                                 frame_samples = sample_action_segment_with_multiple_frames(
                                     vid_emb, vid_times,
                                     min_segment_len=min_seg_len,
                                     frames_per_segment=frames_per_segment,
-                                    stratified=use_stratified
+                                    stratified=use_stratified,
+                                    adaptive_frames=use_adaptive_frames,
+                                    min_target_frames=min_target_frames,
+                                    max_target_frames=max_target_frames
                                 )
 
                                 # Process each target frame within the segment

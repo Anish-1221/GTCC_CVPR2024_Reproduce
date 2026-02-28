@@ -94,15 +94,23 @@ CONFIG.PROGRESS_LOSS = edict({
             'dropout': 0.1,
         },
 
+        # Frame count feature (shared across all architectures)
+        'use_frame_count': True,     # Add log-scale frame count as input feature
+        'frame_count_max': 300.0,    # Normalization factor: log(1+T)/log(1+max)
+
         # Training config (shared across all architectures)
         'min_segment_len': 3,
-        'samples_per_video': 10,     # Number of segments to sample per video
-        'frames_per_segment': 5,     # Number of target frames per segment
+        'samples_per_video': 20,     # Number of times to sample per video (each picks a random action)
+        'frames_per_segment': 5,     # Base number of target frames (used when adaptive_frames=False)
+        'adaptive_frames': True,     # Scale target frames by action length
+        'min_target_frames': 5,      # Minimum target frames per action
+        'max_target_frames': 30,     # Maximum target frames per action
         'stratified_sampling': True, # Ensure early/mid/late parts of actions are covered
         'weighted_loss': True,       # Weight early frame errors more heavily
         'weight_cap': 20.0,          # Maximum weight for early frames (increased from 10)
         'boundary_loss': True,       # Explicit supervision for first/last frames of actions
         'boundary_weight': 5.0,      # Weight multiplier for boundary loss
+
     },
 })
 

@@ -231,8 +231,7 @@ def get_gmm_lfbgf(
                 return get_gaussians(means, stds), get_spread(spreads), means
     except Exception as e:
         traceback.print_exc()
-        exit(1)
-        return None, None, None
+        return None, None, None  # Allow graceful batch skipping
         
 
 
@@ -408,17 +407,23 @@ def sample_action_segment_with_random_index(embeddings, times_dict, min_segment_
     return segment_embeddings, gt_progress, action_name
 
 
-def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segment_len=3, frames_per_segment=3, stratified=False):
+def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segment_len=3, frames_per_segment=3,
+                                                stratified=False, target_action_idx=None,
+                                                adaptive_frames=False, min_target_frames=5, max_target_frames=30):
     """
-    Sample a random non-SIL action, then sample multiple target frames within that action.
+    Sample a random non-SIL action (or a specific one), then sample multiple target frames within that action.
     For each target frame, return embeddings from action_start to target_frame.
 
     Args:
         embeddings: Video embeddings tensor (T, D)
         times_dict: Dictionary with 'step', 'start_frame', 'end_frame' lists
         min_segment_len: Minimum frames needed for a valid segment
-        frames_per_segment: Number of target frames to sample
+        frames_per_segment: Number of target frames to sample (used when adaptive_frames=False)
         stratified: If True, ensure samples from early (0-0.33), mid (0.33-0.67), late (0.67-1.0) parts
+        target_action_idx: If specified, sample from this specific action index (for adaptive sampling)
+        adaptive_frames: If True, scale target frames based on action length
+        min_target_frames: Minimum target frames when adaptive_frames=True
+        max_target_frames: Maximum target frames when adaptive_frames=True
 
     Returns list of (segment_embeddings, gt_progress) tuples for each target frame.
     - segment_embeddings: embeddings[action_start : target_frame+1]
@@ -436,13 +441,31 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
     if len(valid_actions) == 0:
         return []
 
-    _, action_name, action_start, action_end = random.choice(valid_actions)
+    # Select action: either specified by target_action_idx or random
+    if target_action_idx is not None:
+        # Find the action with this index
+        matching_actions = [a for a in valid_actions if a[0] == target_action_idx]
+        if len(matching_actions) == 0:
+            # Fallback to random if specified index not found or not valid
+            _, action_name, action_start, action_end = random.choice(valid_actions)
+        else:
+            _, action_name, action_start, action_end = matching_actions[0]
+    else:
+        _, action_name, action_start, action_end = random.choice(valid_actions)
     action_length = action_end - action_start + 1
 
     T = embeddings.shape[0]
     action_start = max(0, min(action_start, T - 1))
     action_end = max(action_start, min(action_end, T - 1))
     action_length = action_end - action_start + 1
+
+    # Determine number of target frames to sample
+    if adaptive_frames:
+        # Scale target frames by action length: (action_len + 1) // 2
+        # 5-frame action → 5, 15-frame → 8, 40-frame → 20, 100-frame → 30 (capped)
+        num_target_frames = min(max(min_target_frames, (action_length + 1) // 2), max_target_frames)
+    else:
+        num_target_frames = frames_per_segment
 
     # Minimum target: at least min_segment_len frames from action_start
     min_target = action_start + min_segment_len - 1
@@ -471,7 +494,7 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
 
         # Sample from each bin proportionally
         target_indices = []
-        samples_per_bin = max(1, frames_per_segment // 3)
+        samples_per_bin = max(1, num_target_frames // 3)
 
         for bin_targets in [early_targets, mid_targets, late_targets]:
             if bin_targets:
@@ -479,7 +502,7 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
                 target_indices.extend(random.sample(bin_targets, n))
 
         # Fill remaining slots randomly from all targets
-        remaining = frames_per_segment - len(target_indices)
+        remaining = num_target_frames - len(target_indices)
         if remaining > 0:
             remaining_targets = [t for t in possible_targets if t not in target_indices]
             if remaining_targets:
@@ -487,7 +510,7 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
                 target_indices.extend(random.sample(remaining_targets, n))
     else:
         # Random sampling (original behavior)
-        num_frames = min(frames_per_segment, len(possible_targets))
+        num_frames = min(num_target_frames, len(possible_targets))
         target_indices = random.sample(possible_targets, num_frames)
 
     results = []

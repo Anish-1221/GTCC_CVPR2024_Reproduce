@@ -1,136 +1,3 @@
-
-# import torch
-# import torch.nn as nn
-# from models.protas_model import MultiStageModel
-
-# from utils.model_util import get_linear_layers_w_activations
-# from utils.logging import configure_logging_format
-
-# logger = configure_logging_format()
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# class MultiProngAttDropoutModel(nn.Module):
-#     def __init__(
-#         self, 
-#         base_model_class,
-#         base_model_params,
-#         output_dimensionality,
-#         num_heads,
-#         dropping=False,
-#         attn_layers = [512, 256],
-#         drop_layers = [512, 128, 256],
-#         use_protas = False,
-#         protas_params = None,
-#     ):
-#         super(MultiProngAttDropoutModel, self).__init__()
-#         self.num_classes = num_heads
-#         self.dropping = dropping
-#         self.output_dimensionality = output_dimensionality
-
-#         # --- ADD THIS LOGIC ---
-#         self.use_protas = use_protas
-#         if self.use_protas:
-#             from models.protas_model import MultiStageModel
-#             self.protas_model = MultiStageModel(**protas_params)
-
-#         else:
-#             # shared base model
-#             self.base_model = base_model_class(**base_model_params)
-#             # all prongs
-#             self.head_models = nn.ModuleList({
-#                 HeadModel(output_dimensionality, class_name=head_id) for head_id in range(num_heads)
-#             })
-#             # Attention Mechanism
-#             self.attention_layer = nn.Sequential(
-#                 nn.Linear(output_dimensionality * self.num_classes, attn_layers[0]),  # Adjust the architecture as needed
-#                 # nn.Dropout(p=0.2),
-#                 *get_linear_layers_w_activations(attn_layers, activation_at_end=True, activation=nn.Tanh()),
-#                 nn.Linear(attn_layers[-1], self.num_classes),
-#                 nn.Softmax(dim=1)  # Apply softmax to get attention weights
-#             ).to(device)
-#             if self.dropping:
-#                 self.dropout = nn.Sequential(
-#                     nn.Linear(output_dimensionality, drop_layers[0]),  # Adjust the architecture as needed
-#                     *get_linear_layers_w_activations(drop_layers, activation_at_end=True, activation=nn.ReLU()),
-#                     nn.Linear(drop_layers[-1], output_dimensionality + 1)
-#                 ).to(device)
-
-#     def forward(self, videos):
-#         print(f"\n[MODEL DEBUG] Input type: {type(videos)}")
-#         if isinstance(videos, (list, tuple)):
-#             print(f"[MODEL DEBUG] Input is list, unpacking index 0. Type: {type(videos[0])}")
-#             videos = videos[0]
-
-#         print(f"[MODEL DEBUG] Final Tensor Shape before processing: {videos.shape}")
-
-#         if videos.dim() == 4:
-#             print(f"[MODEL DEBUG] Squeezing dim 1 from {videos.shape}")
-#             videos = videos.squeeze(1)
-
-#         if self.use_protas:
-#             # Expected: [Batch, Time, Channels]
-            
-#             # GTCC input x: [Batch, Time, Channels]
-#             # ProTAS expects: [Batch, Channels, Time]
-#             x = videos.transpose(1, 2) 
-#             print(f"[MODEL DEBUG] Shape for Conv1D: {x.shape}")
-#             mask = torch.ones(x.size(0), 1, x.size(2)).to(x.device)
-            
-#             # ProTAS model returns (action_out, progress_out)
-#             # action_out: [Stages, Batch, Classes, Time]
-#             # progress_out: [Stages, Batch, 1, Time]
-#             _, progress_out = self.protas_model(x, mask)
-            
-#             # Take progress from the final stage and remove extra dims
-#             # Result shape: [Batch, Time]
-#             final_progress = progress_out[-1].squeeze(1)
-#             print(f"[MODEL DEBUG] Output Progress Shape: {final_progress.shape}")
-            
-#             return {'progress': final_progress, 'outputs': [None]}
-
-#         general_features = self.base_model(videos)['outputs']
-#         prong_outputs = [prong(general_features) for prong in self.head_models]
-#         prong_outputs = list(map(list, zip(*prong_outputs))) # list transpose to get (batch, video_heads)
-#         outputs = []
-#         attentions = []
-#         dropouts = []
-#         for prong_output in prong_outputs:
-#             T = prong_output[0].shape[0]
-#             prong_output_t = torch.stack(prong_output, dim=0)
-#             concatenated_prongs = torch.stack(prong_output, dim=0).view(T, -1)
-#             attention_weights = self.attention_layer(concatenated_prongs)
-#             weighted_combination = prong_output_t.permute(2,1,0) * attention_weights
-#             combined_embedding = weighted_combination.sum(dim=2).T
-#             outputs.append(combined_embedding)
-#             attentions.append(attention_weights)
-#             if self.dropping:
-#                 dout = self.dropout(combined_embedding).mean(dim=0)
-#                 dropouts.append(dout)
-
-#         if self.dropping:
-#             return {'outputs': outputs, 'attentions': attentions, 'dropouts': dropouts}
-#         else:
-#             return {'outputs': outputs, 'attentions': attentions}
-
-# class HeadModel(nn.Module):
-#     def __init__(self, output_dimensionality, class_name, layers=[512, 128, 256]):
-#         super(HeadModel, self).__init__()
-#         self.class_name = class_name
-#         self.fc_layers = nn.Sequential(
-#                 nn.Linear(output_dimensionality, layers[0]),  # Adjust the architecture as needed
-#                 *get_linear_layers_w_activations(layers, activation_at_end=True, activation=nn.ReLU()),
-#                 nn.Linear(layers[-1], output_dimensionality)
-#             ).to(device)
-        
-#     def forward(self, x):
-#         outputs = []
-#         for i, sequence in enumerate(x):
-#             this_video = self.fc_layers(sequence)
-#             # print(this_video.shape, sequence.shape)
-#             outputs.append(this_video)
-#         return outputs
-
-
 import math
 import torch
 import torch.nn as nn
@@ -160,6 +27,10 @@ def create_progress_head(input_dim, config):
     """
     architecture = config.get('architecture', 'gru')
 
+    # Common parameters for frame count feature
+    use_frame_count = config.get('use_frame_count', True)  # Default True for new models
+    frame_count_max = config.get('frame_count_max', 300.0)
+
     if architecture == 'transformer':
         transformer_config = config.get('transformer_config', {})
         return TransformerProgressHead(
@@ -169,6 +40,8 @@ def create_progress_head(input_dim, config):
             num_layers=transformer_config.get('num_layers', 2),
             ffn_dim=transformer_config.get('ffn_dim', 128),
             dropout=transformer_config.get('dropout', 0.1),
+            use_frame_count=use_frame_count,
+            frame_count_max=frame_count_max,
         )
     elif architecture == 'dilated_conv':
         dilated_config = config.get('dilated_conv_config', {})
@@ -178,6 +51,8 @@ def create_progress_head(input_dim, config):
             kernel_size=dilated_config.get('kernel_size', 3),
             dilations=dilated_config.get('dilations', [1, 2, 4, 8, 16, 32]),
             dropout=dilated_config.get('dropout', 0.1),
+            use_frame_count=use_frame_count,
+            frame_count_max=frame_count_max,
         )
     else:
         # Default: GRU-based ProgressHead (backward compatible)
@@ -186,6 +61,8 @@ def create_progress_head(input_dim, config):
             hidden_dim=config.get('hidden_dim', 64),
             use_gru=config.get('use_gru', True),
             use_position_encoding=config.get('use_position_encoding', False),
+            use_frame_count=use_frame_count,
+            frame_count_max=frame_count_max,
         )
 
 
@@ -193,20 +70,32 @@ class ProgressHead(nn.Module):
     """
     Learnable progress prediction head.
 
-    Supports two modes for backward compatibility:
-    - Legacy mode (use_position_encoding=False): Original GRU without position encoding (v2 checkpoints)
-    - New mode (use_position_encoding=True): With position encoding and learnable h0 (v3+)
+    Supports multiple modes:
+    - Legacy mode (use_position_encoding=False, use_frame_count=False): Original GRU
+    - Position encoding mode: With relative position (0 to 1) concatenated
+    - Frame count mode (RECOMMENDED): With log-scale frame count feature
+
+    Frame count is the KEY feature that tells the model how many frames it has seen,
+    enabling it to predict progress correctly for both short and long actions.
 
     Takes segment embeddings and predicts progress at the final frame.
     """
-    def __init__(self, input_dim=128, hidden_dim=64, use_gru=True, use_position_encoding=False):
+    def __init__(self, input_dim=128, hidden_dim=64, use_gru=True, use_position_encoding=False,
+                 use_frame_count=True, frame_count_max=300.0):
         super(ProgressHead, self).__init__()
         self.use_gru = use_gru
         self.input_dim = input_dim
         self.use_position_encoding = use_position_encoding
+        self.use_frame_count = use_frame_count
+        self.frame_count_max = frame_count_max
 
-        # GRU input dimension: +1 only if using position encoding
-        gru_input_dim = input_dim + 1 if use_position_encoding else input_dim
+        # Calculate extra dimensions for position encoding and/or frame count
+        extra_dims = 0
+        if use_position_encoding:
+            extra_dims += 1
+        if use_frame_count:
+            extra_dims += 1
+        gru_input_dim = input_dim + extra_dims
 
         if use_gru:
             self.gru = nn.GRU(gru_input_dim, hidden_dim, num_layers=1,
@@ -230,21 +119,40 @@ class ProgressHead(nn.Module):
                 nn.Sigmoid()
             )
 
+        # Initialize final bias toward low values (sigmoid(-2) ≈ 0.12)
+        # This helps the model start with low predictions instead of 0.5
+        with torch.no_grad():
+            self.fc[-2].bias.fill_(-2.0)
+
     def forward(self, segment_embeddings):
         T = segment_embeddings.shape[0]
         device = segment_embeddings.device
+
+        # Build list of features to concatenate
+        features_to_concat = [segment_embeddings]
 
         if self.use_position_encoding:
             # Position encoding: normalized frame index (0 to ~1)
             positions = torch.arange(T, device=device, dtype=torch.float32) / max(T, 1)
             positions = positions.unsqueeze(1)  # (T, 1)
-            x = torch.cat([segment_embeddings, positions], dim=1)  # (T, D+1)
+            features_to_concat.append(positions)
+
+        if self.use_frame_count:
+            # Frame count: log-scale normalized (same value for all frames in segment)
+            # This tells the model "you have T frames total"
+            # log(1+T) / log(1+max_T) keeps values bounded [0.12, ~1.1] for T in [1, 500]
+            fc_value = math.log1p(T) / math.log1p(self.frame_count_max)
+            frame_count = torch.full((T, 1), fc_value, device=device, dtype=torch.float32)
+            features_to_concat.append(frame_count)
+
+        # Concatenate all features
+        if len(features_to_concat) > 1:
+            x = torch.cat(features_to_concat, dim=1)
         else:
-            # Legacy mode: no position encoding
-            x = segment_embeddings  # (T, D)
+            x = segment_embeddings
 
         if self.use_gru:
-            x = x.unsqueeze(0)  # (1, T, D) or (1, T, D+1)
+            x = x.unsqueeze(0)  # (1, T, D+extras)
             if self.use_position_encoding:
                 _, h_n = self.gru(x, self.h0)  # Use learnable h0
             else:
@@ -268,25 +176,30 @@ class TransformerProgressHead(nn.Module):
     avoiding the contradictory signals that occur with absolute position encoding.
 
     Architecture:
-    - Input projection: Linear(input_dim -> d_model)
+    - Input projection: Linear(input_dim + frame_count -> d_model)
     - Causal Transformer blocks with ALiBi attention
     - Take last token (causal aggregation)
     - Output MLP: d_model -> 32 -> 1 -> Sigmoid
     """
 
     def __init__(self, input_dim=128, d_model=64, num_heads=4, num_layers=2,
-                 ffn_dim=128, dropout=0.1):
+                 ffn_dim=128, dropout=0.1, use_frame_count=True, frame_count_max=300.0):
         super(TransformerProgressHead, self).__init__()
         self.d_model = d_model
         self.num_heads = num_heads
         self.head_dim = d_model // num_heads
         self.num_layers = num_layers
+        self.use_frame_count = use_frame_count
+        self.frame_count_max = frame_count_max
 
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
 
+        # Calculate input dimension: +1 for frame count if enabled
+        proj_input_dim = input_dim + (1 if use_frame_count else 0)
+
         # Input projection
         self.input_proj = nn.Sequential(
-            nn.Linear(input_dim, d_model),
+            nn.Linear(proj_input_dim, d_model),
             nn.LayerNorm(d_model),
         )
 
@@ -310,6 +223,10 @@ class TransformerProgressHead(nn.Module):
             nn.Linear(32, 1),
             nn.Sigmoid(),
         )
+
+        # Initialize final bias toward low values (sigmoid(-2) ≈ 0.12)
+        with torch.no_grad():
+            self.output_mlp[-2].bias.fill_(-2.0)
 
     def _get_alibi_bias(self, T, device):
         """
@@ -339,6 +256,15 @@ class TransformerProgressHead(nn.Module):
         """
         T = segment_embeddings.shape[0]
         device = segment_embeddings.device
+
+        # Add frame count feature if enabled
+        if self.use_frame_count:
+            # Frame count: log-scale normalized (same value for all frames in segment)
+            # This tells the model "you have T frames total"
+            # log(1+T) / log(1+max_T) keeps values bounded for variable T
+            fc_value = math.log1p(T) / math.log1p(self.frame_count_max)
+            frame_count = torch.full((T, 1), fc_value, device=device, dtype=segment_embeddings.dtype)
+            segment_embeddings = torch.cat([segment_embeddings, frame_count], dim=1)
 
         # Handle single frame case
         if T == 1:
@@ -462,14 +388,14 @@ class DilatedConvProgressHead(nn.Module):
     without explicit position encoding. Similar architecture to ProTAS.
 
     Architecture:
-    - Input projection: Linear(input_dim -> hidden_dim)
+    - Input projection: Linear(input_dim + frame_count -> hidden_dim)
     - Causal dilated residual blocks (dilations: 1, 2, 4, 8, 16, 32)
     - Take last position (causal pooling)
     - Output MLP: hidden_dim -> 32 -> 1 -> Sigmoid
     """
 
     def __init__(self, input_dim=128, hidden_dim=64, kernel_size=3,
-                 dilations=None, dropout=0.1):
+                 dilations=None, dropout=0.1, use_frame_count=True, frame_count_max=300.0):
         super(DilatedConvProgressHead, self).__init__()
 
         if dilations is None:
@@ -478,10 +404,15 @@ class DilatedConvProgressHead(nn.Module):
         self.hidden_dim = hidden_dim
         self.kernel_size = kernel_size
         self.dilations = dilations
+        self.use_frame_count = use_frame_count
+        self.frame_count_max = frame_count_max
+
+        # Calculate input dimension: +1 for frame count if enabled
+        proj_input_dim = input_dim + (1 if use_frame_count else 0)
 
         # Input projection
         self.input_proj = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
+            nn.Linear(proj_input_dim, hidden_dim),
             nn.ReLU(),
         )
 
@@ -499,6 +430,10 @@ class DilatedConvProgressHead(nn.Module):
             nn.Sigmoid(),
         )
 
+        # Initialize final bias toward low values (sigmoid(-2) ≈ 0.12)
+        with torch.no_grad():
+            self.output_mlp[-2].bias.fill_(-2.0)
+
     def forward(self, segment_embeddings):
         """
         Args:
@@ -508,6 +443,16 @@ class DilatedConvProgressHead(nn.Module):
             progress: scalar [0, 1]
         """
         T = segment_embeddings.shape[0]
+        device = segment_embeddings.device
+
+        # Add frame count feature if enabled
+        if self.use_frame_count:
+            # Frame count: log-scale normalized (same value for all frames in segment)
+            # This tells the model "you have T frames total"
+            # log(1+T) / log(1+max_T) keeps values bounded for variable T
+            fc_value = math.log1p(T) / math.log1p(self.frame_count_max)
+            frame_count = torch.full((T, 1), fc_value, device=device, dtype=segment_embeddings.dtype)
+            segment_embeddings = torch.cat([segment_embeddings, frame_count], dim=1)
 
         # Handle single frame case
         if T == 1:
