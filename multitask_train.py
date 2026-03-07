@@ -9,7 +9,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from utils.os_util import get_env_variable
 from utils.repeating_distributed_sampler import RepeatingDistributedSampler
-from utils.loss_entry import get_loss_function
+from utils.loss_entry import get_loss_function, get_progress_only_loss_function
 from utils.logging import configure_logging_format
 from utils.plotter import validate_folder
 from utils.train_util import (
@@ -20,7 +20,7 @@ from utils.train_util import (
 from utils.collate_functions import jsondataset_collate_fn
 from utils.data_splits import load_splits_from_json
 from models.json_dataset import jsondataset_get_train_test, jsondataset_from_splits, data_json_labels_handles
-from models.alignment_training_loop import alignment_training_loop
+from models.alignment_training_loop import alignment_training_loop, progress_head_training_loop
 from models.model_multiprong import MultiProngAttDropoutModel
 from configs.entry_config import get_generic_config
 
@@ -233,17 +233,68 @@ if __name__ == '__main__':
             loss_type = lt
             break
 
-    alignment_training_loop(
-        model,
-        train_dataloaders,
-        get_loss_function(CFG, num_epochs=CFG.NUM_EPOCHS),
-        master_experiment_foldername,
-        CONFIG=CFG,
-        val_dl_dict=val_dataloaders,
-        local_rank=local_rank,
-        train_samplers=train_samplers,
-        loss_type=loss_type
-    )
+    # Check if progress-head-only training mode
+    train_progress_only = getattr(CFG, 'TRAIN_PROGRESS_ONLY', False)
+
+    if train_progress_only:
+        # Load alignment checkpoint
+        alignment_ckpt_path = getattr(CFG, 'ALIGNMENT_CHECKPOINT', None)
+        if alignment_ckpt_path is None:
+            raise ValueError("--train_progress_only requires --alignment_checkpoint <path>")
+
+        if local_rank == 0:
+            logger.info(f"Loading alignment checkpoint from: {alignment_ckpt_path}")
+
+        checkpoint = torch.load(alignment_ckpt_path, map_location=device)
+        model_to_load = model.module if hasattr(model, 'module') else model
+
+        # Load state dict, allowing missing progress_head keys (will be randomly initialized)
+        state_dict = checkpoint['model_state_dict']
+        # Remove DDP 'module.' prefix if present in checkpoint but not in model
+        cleaned_state_dict = {}
+        for k, v in state_dict.items():
+            new_key = k.replace('module.', '') if k.startswith('module.') else k
+            cleaned_state_dict[new_key] = v
+
+        # If reinit_progress_head, exclude progress_head keys from checkpoint
+        reinit_progress = getattr(CFG, 'REINIT_PROGRESS_HEAD', False)
+        if reinit_progress:
+            cleaned_state_dict = {k: v for k, v in cleaned_state_dict.items()
+                                  if 'progress_head' not in k}
+            if local_rank == 0:
+                logger.info("Reinitializing progress head from scratch (bias=-2.0)")
+
+        missing, unexpected = model_to_load.load_state_dict(cleaned_state_dict, strict=False)
+        if local_rank == 0:
+            if missing:
+                logger.info(f"Missing keys (will be randomly initialized): {missing}")
+            if unexpected:
+                logger.warning(f"Unexpected keys in checkpoint: {unexpected}")
+
+        progress_head_training_loop(
+            model,
+            train_dataloaders,
+            get_progress_only_loss_function(CFG),
+            master_experiment_foldername,
+            CONFIG=CFG,
+            val_dl_dict=val_dataloaders,
+            local_rank=local_rank,
+            train_samplers=train_samplers,
+            progress_lr=getattr(CFG, 'PROGRESS_LR', 1e-3),
+            num_epochs=getattr(CFG, 'PROGRESS_EPOCHS', 50),
+        )
+    else:
+        alignment_training_loop(
+            model,
+            train_dataloaders,
+            get_loss_function(CFG, num_epochs=CFG.NUM_EPOCHS),
+            master_experiment_foldername,
+            CONFIG=CFG,
+            val_dl_dict=val_dataloaders,
+            local_rank=local_rank,
+            train_samplers=train_samplers,
+            loss_type=loss_type
+        )
 
     # Cleanup
     if use_ddp:

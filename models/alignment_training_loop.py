@@ -16,7 +16,33 @@ from utils.plotter import validate_folder
 from utils.tensorops import preprocess_batch, contains_non_float_values
 from utils.loss_functions import TCC_loss
 
+import os
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _inject_raw_features(output_dict, times, config):
+    """Load 2048-d raw features from disk and inject into output_dict.
+
+    Used when config.PROGRESS_LOSS.learnable.features == 'raw' and
+    config.RAW_FEATURES_PATH is set. Replaces encoder's 512-d intermediates
+    with pre-computed 2048-d features that have no alignment influence.
+    """
+    try:
+        features_cfg = config.PROGRESS_LOSS.learnable.features
+    except (AttributeError, KeyError):
+        features_cfg = 'aligned'
+
+    raw_path = getattr(config, 'RAW_FEATURES_PATH', None)
+    if features_cfg != 'raw' or raw_path is None:
+        return
+
+    raw_feats = []
+    for t in times:
+        feat_file = os.path.join(raw_path, f"{t['name']}.npy")
+        feat = torch.from_numpy(np.load(feat_file)).float().to(device)
+        raw_feats.append(feat)
+    output_dict['raw_features'] = raw_feats
 
 # def print_memory_stats(stage, local_rank=0):
 #     """Print detailed memory stats"""
@@ -341,6 +367,9 @@ def alignment_training_loop(
                 raise
             del inputs
 
+            # Inject 2048-d raw features from disk if configured
+            _inject_raw_features(output_dict, times, CONFIG)
+
             try:
                 loss_dict = loss_fn(output_dict, epoch, times=times)
                 print_memory_stats(f"After loss computation", local_rank)
@@ -367,9 +396,9 @@ def alignment_training_loop(
             loss = loss_dict['total_loss']
 
             # [FIX] Skip batches with extreme loss to prevent weight corruption
-            # Only applies to GTCC - LAV/VAVA have naturally higher loss values
-            # Normal GTCC loss is ~40k-250k. Values > 1e7 indicate numerical instability.
-            if loss_type == 'GTCC':
+            # Applies to GTCC and TCC - LAV/VAVA have naturally higher loss values
+            # Normal GTCC/TCC loss is ~40k-250k. Values > 1e7 indicate numerical instability.
+            if loss_type in ['GTCC', 'tcc']:
                 MAX_SAFE_LOSS = 1e7
                 if loss.item() > MAX_SAFE_LOSS:
                     logger.warning(f"[EXTREME LOSS] {loss.item():.2e} > {MAX_SAFE_LOSS:.2e} - skipping batch to protect weights")
@@ -432,7 +461,27 @@ def alignment_training_loop(
                             param.grad = param.grad / progress_lambda
 
             del loss
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=.00001, norm_type=2)
+
+            # Separate gradient clipping for encoder vs progress head
+            # The global clip was killing progress_head gradients because encoder
+            # gradients dominate the total norm after lambda rescaling
+            model_to_check_clip = model.module if hasattr(model, 'module') else model
+            if hasattr(model_to_check_clip, 'progress_head') and hasattr(model_to_check_clip, 'use_progress_head') and model_to_check_clip.use_progress_head:
+                # Clip encoder parameters (same threshold as original)
+                encoder_params = [p for n, p in model_to_check_clip.named_parameters()
+                                  if 'progress_head' not in n and p.grad is not None]
+                if encoder_params:
+                    nn.utils.clip_grad_norm_(encoder_params, max_norm=.00001, norm_type=2)
+
+                # Clip progress head separately with reasonable threshold
+                progress_params = [p for p in model_to_check_clip.progress_head.parameters()
+                                   if p.grad is not None]
+                if progress_params:
+                    nn.utils.clip_grad_norm_(progress_params, max_norm=1.0, norm_type=2)
+            else:
+                # No progress head — use original global clipping
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=.00001, norm_type=2)
+
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
@@ -456,6 +505,13 @@ def alignment_training_loop(
                 filename=f'{foldername}/train_loss_epochlevel.png',
                 condition=len(epoch_losses_to_plot) > 0,
                 scatter=False
+            )
+            # Log-scale plot — prevents loss spikes from hiding normal values
+            _simple_loss_plot_log(
+                epoch_losses_to_plot,
+                plot_title='Training Loss over epochs (log scale)',
+                filename=f'{foldername}/train_loss_epochlevel_log.png',
+                condition=len(epoch_losses_to_plot) > 0,
             )
             logger.info(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f} ({time.time() - start:.2f}s)")
 
@@ -753,6 +809,9 @@ def run_validation_epoch(
                 # Forward pass (no gradients)
                 output_dict = model(inputs)
 
+                # Inject 2048-d raw features from disk if configured
+                _inject_raw_features(output_dict, times, config)
+
                 # Compute loss
                 loss_dict = loss_fn(output_dict, epoch, times=times)
 
@@ -779,3 +838,318 @@ def run_validation_epoch(
         logger.info(f"[VAL] Batches: {successful_batches}, Skipped: {skipped_batches}, Avg Loss: {avg_val_loss:.4f}")
 
     return avg_val_loss
+
+
+def progress_head_training_loop(
+        model,
+        train_dl_dict,
+        loss_fn: callable,
+        foldername: str,
+        CONFIG,
+        val_dl_dict=None,
+        local_rank=0,
+        train_samplers=None,
+        progress_lr=1e-3,
+        num_epochs=50,
+    ):
+    """Train only the progress head with encoder frozen.
+
+    Loads an alignment-trained model and trains ONLY the progress_head module.
+    The encoder, attention layers, head models, and dropout are all frozen.
+
+    Key differences from alignment_training_loop:
+    - No alignment loss computed (saves GPU memory and time)
+    - No lambda multiplier on progress loss
+    - No gradient rescaling
+    - Separate optimizer with higher learning rate
+    - Reasonable gradient clipping (max_norm=1.0 instead of 0.00001)
+    """
+    logger.info("=" * 60)
+    logger.info("PROGRESS-HEAD-ONLY TRAINING MODE")
+    logger.info("=" * 60)
+
+    model_to_check = model.module if hasattr(model, 'module') else model
+
+    # Freeze everything except progress_head
+    frozen_count = 0
+    trainable_count = 0
+    for name, param in model_to_check.named_parameters():
+        if 'progress_head' not in name:
+            param.requires_grad = False
+            frozen_count += param.numel()
+        else:
+            param.requires_grad = True
+            trainable_count += param.numel()
+
+    logger.info(f"Frozen parameters: {frozen_count:,}")
+    logger.info(f"Trainable parameters (progress_head): {trainable_count:,}")
+    logger.info(f"Learning rate: {progress_lr}")
+    logger.info(f"Epochs: {num_epochs}")
+
+    save_dict_to_json_file(CONFIG, foldername + '/config.json')
+
+    # Separate optimizer for progress head only
+    optimizer = optim.Adam(model_to_check.progress_head.parameters(), lr=progress_lr)
+
+    # Checkpointing
+    ckpt_folder = foldername + '/' + 'ckpt'
+    validate_folder(ckpt_folder)
+
+    train_loss_to_plot = []
+    epoch_losses_to_plot = []
+    val_losses_to_plot = []
+    best_val_loss = float('inf')
+
+    for epoch in range(num_epochs):
+        if train_samplers is not None:
+            for task, sampler in train_samplers.items():
+                sampler.set_epoch(epoch)
+
+        running_loss = 0
+        start = time.time()
+        model.train()
+        all_sub_batches = _get_all_batches_with_taskid(train_dl_dict)
+
+        total_batches = 0
+        skipped_length = 0
+        skipped_exception = 0
+        successful_batches = 0
+
+        for i, (task, (inputs, times)) in enumerate(all_sub_batches):
+            total_batches += 1
+            optimizer.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+
+            inputs, times = preprocess_batch(inputs, times, device=device, skip_rate=CONFIG.SKIP_RATE)
+
+            # Skip short sequences
+            MIN_SEQ_LENGTH = 10
+            if any(seq.shape[0] < MIN_SEQ_LENGTH for seq in inputs):
+                skipped_length += 1
+                del inputs
+                continue
+
+            try:
+                # Forward pass — encoder runs but with no_grad context for efficiency
+                # Note: we don't use torch.no_grad() on model() because progress_head
+                # needs gradients. The frozen params just won't accumulate grads.
+                output_dict = model(inputs)
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    if local_rank == 0:
+                        logger.error(f"[OOM FORWARD] Task: {task} - skipping")
+                    del inputs
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                    skipped_exception += 1
+                    continue
+                raise
+            del inputs
+
+            # Inject 2048-d raw features from disk if configured
+            _inject_raw_features(output_dict, times, CONFIG)
+
+            try:
+                loss_dict = loss_fn(output_dict, epoch, times=times)
+                if loss_dict is None or loss_dict['total_loss'] is None:
+                    raise ValueError("Loss calculation returned None")
+            except Exception as e:
+                skipped_exception += 1
+                if local_rank == 0 and skipped_exception < 5:
+                    logger.warning(f"Skipping batch in task {task}: {type(e).__name__}")
+                try:
+                    del output_dict
+                except:
+                    pass
+                gc.collect()
+                torch.cuda.empty_cache()
+                continue
+
+            loss = loss_dict['total_loss']
+
+            if contains_non_float_values(loss):
+                logger.error(f'Loss was NAN! Skipping batch.')
+                del output_dict, loss_dict, loss
+                gc.collect()
+                torch.cuda.empty_cache()
+                skipped_exception += 1
+                continue
+
+            del output_dict
+            running_loss += loss.item()
+            train_loss_to_plot.append(loss.item())
+
+            if local_rank == 0:
+                logger.info(f"[BATCH {i}] Progress Loss: {loss.item():.6f}")
+
+            # Skip backward if loss has no gradient (e.g., batch produced no valid samples)
+            if not loss.requires_grad:
+                if local_rank == 0:
+                    logger.warning(f"[BATCH {i}] Skipping backward — loss has no grad_fn (no valid samples)")
+                optimizer.zero_grad(set_to_none=True)
+                continue
+
+            # Backward pass
+            try:
+                loss.backward()
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    if local_rank == 0:
+                        logger.error(f"[OOM BACKWARD] Task: {task} - skipping")
+                    del loss, loss_dict
+                    for param in model_to_check.progress_head.parameters():
+                        if param.grad is not None:
+                            param.grad = None
+                    gc.collect()
+                    optimizer.zero_grad(set_to_none=True)
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                    skipped_exception += 1
+                    continue
+                raise
+
+            del loss
+
+            # No gradient rescaling needed — loss is pure progress loss (no lambda)
+            # Reasonable gradient clipping for progress head only
+            nn.utils.clip_grad_norm_(model_to_check.progress_head.parameters(), max_norm=1.0, norm_type=2)
+
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            successful_batches += 1
+            torch.cuda.empty_cache()
+
+        # Epoch summary
+        if local_rank == 0:
+            avg_loss = running_loss / successful_batches if successful_batches > 0 else 0.0
+            epoch_losses_to_plot.append(avg_loss)
+            logger.info(f"Epoch [{epoch+1}/{num_epochs}], Progress Loss: {avg_loss:.6f} ({time.time() - start:.2f}s)")
+            logger.info(f"  Batches: {successful_batches}/{total_batches}, Skipped: {skipped_length}, Errors: {skipped_exception}")
+
+            _simple_loss_plot(
+                epoch_losses_to_plot,
+                plot_title='Progress Loss over epochs',
+                filename=f'{foldername}/progress_train_loss.png',
+                condition=len(epoch_losses_to_plot) > 0,
+                scatter=False
+            )
+
+            # Log-scale plot
+            _simple_loss_plot_log(
+                epoch_losses_to_plot,
+                plot_title='Progress Loss over epochs (log scale)',
+                filename=f'{foldername}/progress_train_loss_log.png',
+                condition=len(epoch_losses_to_plot) > 0,
+            )
+
+        # Memory cleanup before validation
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+        # Validation
+        if val_dl_dict is not None and local_rank == 0:
+            val_loss = _run_progress_validation(
+                model=model,
+                val_dl_dict=val_dl_dict,
+                loss_fn=loss_fn,
+                epoch=epoch,
+                config=CONFIG,
+                local_rank=local_rank,
+            )
+            val_losses_to_plot.append(val_loss)
+
+            _plot_train_val_loss(
+                epoch_losses_to_plot,
+                val_losses_to_plot,
+                filename=f'{foldername}/progress_train_val_loss.png'
+            )
+
+            logger.info(f"Epoch [{epoch+1}/{num_epochs}], Val Progress Loss: {val_loss:.6f}")
+
+            # Save best model
+            model_to_save = model.module if hasattr(model, 'module') else model
+
+            def is_valid_loss(loss_val):
+                return loss_val is not None and not math.isnan(loss_val) and not math.isinf(loss_val)
+
+            if is_valid_loss(val_loss) and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                logger.info(f"New best progress loss: {val_loss:.6f} - saving checkpoint")
+                ckpt_save(
+                    model_t=model_to_save,
+                    optimizer_t=optimizer,
+                    epoch_t=epoch,
+                    loss_t=val_loss,
+                    filename=ckpt_folder + '/best_model_progress.pt',
+                    config=CONFIG
+                )
+
+        model.train()
+
+    logger.info("=" * 60)
+    logger.info(f"Progress-head-only training complete. Best val loss: {best_val_loss:.6f}")
+    logger.info("=" * 60)
+
+
+def _run_progress_validation(model, val_dl_dict, loss_fn, epoch, config, local_rank=0):
+    """Run validation for progress-head-only training (simplified, no pairwise checks)."""
+    model.eval()
+    running_loss = 0.0
+    successful_batches = 0
+    skipped_batches = 0
+
+    with torch.no_grad():
+        all_val_batches = _get_all_batches_with_taskid(val_dl_dict)
+
+        for i, (task, (inputs, times)) in enumerate(all_val_batches):
+            torch.cuda.empty_cache()
+
+            inputs, times = preprocess_batch(
+                inputs, times, device=device, skip_rate=config.SKIP_RATE
+            )
+
+            MIN_SEQ_LENGTH = 10
+            if any(seq.shape[0] < MIN_SEQ_LENGTH for seq in inputs):
+                skipped_batches += 1
+                del inputs
+                continue
+
+            try:
+                output_dict = model(inputs)
+                _inject_raw_features(output_dict, times, config)
+                loss_dict = loss_fn(output_dict, epoch, times=times)
+
+                if loss_dict is not None and loss_dict['total_loss'] is not None:
+                    loss = loss_dict['total_loss']
+                    if not contains_non_float_values(loss):
+                        running_loss += loss.item()
+                        successful_batches += 1
+
+                del output_dict
+            except Exception as e:
+                skipped_batches += 1
+                if local_rank == 0:
+                    logger.warning(f"[VAL] Skipping batch in {task}: {type(e).__name__}")
+
+            del inputs
+            gc.collect()
+            torch.cuda.empty_cache()
+
+    avg_val_loss = running_loss / successful_batches if successful_batches > 0 else float('inf')
+    if local_rank == 0:
+        logger.info(f"[VAL] Batches: {successful_batches}, Skipped: {skipped_batches}, Avg Progress Loss: {avg_val_loss:.6f}")
+    return avg_val_loss
+
+
+def _simple_loss_plot_log(loss_list, plot_title, filename, condition):
+    """Plot loss on log scale y-axis — prevents spikes from hiding normal values."""
+    if condition and len(loss_list) > 0:
+        plt.clf()
+        plt.plot(range(len(loss_list)), loss_list)
+        plt.yscale('log')
+        plt.title(plot_title)
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss (log scale)')
+        plt.savefig(filename)

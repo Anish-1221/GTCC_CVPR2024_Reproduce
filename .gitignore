@@ -19,3 +19,7 @@ output_learnable_progress_v4
 output_learnable_progress_v5
 output_learnable_progress_v6
 output_learnable_progress_v7
+output_learnable_progress_v8
+output_testing
+output_baselines
+__pycache__

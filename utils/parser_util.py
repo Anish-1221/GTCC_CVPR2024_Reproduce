@@ -31,6 +31,26 @@ def prog_argparser():
         help='Progress head architecture (only used with --progress_loss learnable). '
              'Options: gru (default), transformer (ALiBi), dilated_conv')
 
+    # Progress-head-only training mode
+    parser.add_argument('--train_progress_only', action='store_true',
+        help='Train only the progress head (freeze encoder). Requires --alignment_checkpoint.')
+    parser.add_argument('--alignment_checkpoint', type=str, default=None,
+        help='Path to alignment checkpoint to load before training progress head.')
+    parser.add_argument('--progress_lr', type=float, default=1e-3,
+        help='Learning rate for progress head training (used with --train_progress_only)')
+    parser.add_argument('--progress_epochs', type=int, default=50,
+        help='Number of epochs for progress-only training')
+    parser.add_argument('--reinit_progress_head', action='store_true',
+        help='Reinitialize progress head weights (ignore checkpoint weights, start fresh with bias=-2.0)')
+    parser.add_argument('--progress_loss_mode', type=str, default='legacy',
+        choices=['uniform_mono', 'sqrt_weighted', 'mse', 'legacy', 'dense'],
+        help='Progress loss formulation. uniform_mono (default), sqrt_weighted, mse, legacy, dense')
+    parser.add_argument('--progress_features', type=str, default='aligned',
+        choices=['aligned', 'raw'],
+        help='Feature source for progress head: aligned (128-d post-encoder) or raw (2048-d pre-computed from disk)')
+    parser.add_argument('--raw_features_path', type=str, default=None,
+        help='Path to folder containing 2048-d raw feature .npy files (required when --progress_features raw)')
+
     # Create a mutually exclusive group for the METHOD/LOSS
     loss_type = parser.add_mutually_exclusive_group(required=True)
     loss_type.add_argument('--TCC',  '--tcc', nargs='?', action='store', const='tcc', dest='loss_type', help='Loss type is TCC')
@@ -69,4 +89,12 @@ def prog_argparser():
         'progress_loss': args.progress_loss,
         'progress_lambda': args.progress_lambda,
         'progress_arch': args.progress_arch,
+        'train_progress_only': args.train_progress_only,
+        'alignment_checkpoint': args.alignment_checkpoint,
+        'progress_lr': args.progress_lr,
+        'progress_epochs': args.progress_epochs,
+        'reinit_progress_head': args.reinit_progress_head,
+        'progress_loss_mode': args.progress_loss_mode,
+        'progress_features': args.progress_features,
+        'raw_features_path': args.raw_features_path,
     }

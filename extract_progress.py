@@ -13,11 +13,13 @@ import os
 import torch
 import numpy as np
 
+import glob
+from collections import OrderedDict
 from torch.utils.data import DataLoader
 from models.json_dataset import jsondataset_from_splits, data_json_labels_handles
+from models.model_multiprong import MultiProngAttDropoutModel
 from utils.collate_functions import jsondataset_collate_fn
-from utils.train_util import get_config_for_folder, get_data_subfolder_and_extension
-from utils.ckpt_save import get_ckpt_for_eval
+from utils.train_util import get_config_for_folder, get_data_subfolder_and_extension, get_base_model_deets
 from utils.os_util import get_env_variable
 from utils.plotter import validate_folder
 
@@ -30,14 +32,20 @@ def load_splits_from_json(splits_path='/vision/anishn/GTCC_CVPR2024/data_splits.
     return splits_data['splits']
 
 
-def extract_progress_for_video(model, video_data, times_dict):
+def extract_progress_for_video(model, video_data, times_dict, raw_features_tensor=None):
     """Extract predicted progress values per action segment."""
     model.eval()
 
     with torch.no_grad():
         outputs_dict = model(video_data)
 
-    outputs = outputs_dict['outputs'][0]  # First video in batch
+    # Use 2048-d raw features from disk if provided, else aligned (128-d)
+    if raw_features_tensor is not None:
+        outputs = raw_features_tensor
+    elif 'raw_features' in outputs_dict:
+        outputs = outputs_dict['raw_features'][0]
+    else:
+        outputs = outputs_dict['outputs'][0]
     progress_head = outputs_dict.get('progress_head')
 
     if progress_head is None:
@@ -88,10 +96,123 @@ def extract_progress_for_video(model, video_data, times_dict):
     }
 
 
+def load_model_for_extraction(folder_to_test, config, num_heads, device, ckpt_filename='best_model.pt'):
+    """
+    Load model for progress extraction.
+    Reads progress head architecture from the stored config (ground truth),
+    bypassing the dimension-based auto-detection in ckpt_restore_mprong which
+    cannot distinguish frame_count from position_encoding (both add 1 dim).
+    """
+    # Find checkpoint
+    ckpt_path = os.path.join(folder_to_test, 'ckpt', ckpt_filename)
+    ckpt_handle = ckpt_filename.replace('.pt', '')
+    if not os.path.exists(ckpt_path):
+        ckpts = glob.glob(os.path.join(folder_to_test, 'ckpt', 'epoch-*.pt'))
+        if not ckpts:
+            return None, None, None
+        ckpts = sorted(ckpts, key=lambda x: int(x.split('epoch-')[-1].split('.')[0]))
+        ckpt_path = ckpts[-1]
+        ckpt_handle = os.path.basename(ckpt_path).replace('.pt', '')
+
+    checkpoint = torch.load(ckpt_path, map_location='cpu')
+    config_obj = checkpoint['config']
+    state_dict = checkpoint['model_state_dict']
+
+    # Check if progress head exists in checkpoint
+    has_progress_head = any(
+        k.startswith('progress_head.') or k.startswith('module.progress_head.')
+        for k in state_dict.keys()
+    )
+
+    # Build progress_head_config from stored config (not auto-detection from weight dims)
+    progress_head_config = None
+    if has_progress_head:
+        try:
+            learnable_cfg = config_obj['PROGRESS_LOSS']['learnable']
+        except (KeyError, TypeError):
+            learnable_cfg = {}
+
+        architecture = learnable_cfg.get('architecture', 'gru')
+        features_source = learnable_cfg.get('features', 'aligned')
+
+        if architecture == 'transformer':
+            print(f"[INFO] Loading TransformerProgressHead (from stored config, features={features_source})")
+            progress_head_config = {
+                'architecture': 'transformer',
+                'use_frame_count': learnable_cfg.get('use_frame_count', True),
+                'frame_count_max': learnable_cfg.get('frame_count_max', 300.0),
+                'transformer_config': learnable_cfg.get('transformer_config', {}),
+                'features': features_source,
+            }
+        elif architecture == 'dilated_conv':
+            print(f"[INFO] Loading DilatedConvProgressHead (from stored config, features={features_source})")
+            progress_head_config = {
+                'architecture': 'dilated_conv',
+                'use_frame_count': learnable_cfg.get('use_frame_count', True),
+                'frame_count_max': learnable_cfg.get('frame_count_max', 300.0),
+                'dilated_conv_config': learnable_cfg.get('dilated_conv_config', {}),
+                'features': features_source,
+            }
+        else:
+            use_pos_enc = learnable_cfg.get('use_position_encoding', False)
+            use_frame_count = learnable_cfg.get('use_frame_count', True)
+            print(f"[INFO] Loading GRU ProgressHead (pos_enc={use_pos_enc}, frame_count={use_frame_count}, features={features_source})")
+            progress_head_config = {
+                'architecture': 'gru',
+                'hidden_dim': learnable_cfg.get('hidden_dim', 64),
+                'use_gru': learnable_cfg.get('use_gru', True),
+                'use_position_encoding': use_pos_enc,
+                'use_frame_count': use_frame_count,
+                'frame_count_max': learnable_cfg.get('frame_count_max', 300.0),
+                'features': features_source,
+            }
+
+    # Build model
+    base_model_class, base_model_params = get_base_model_deets(config_obj)
+    arch = config_obj['ARCHITECTURE']
+    if 'drop_layers' in arch:
+        model = MultiProngAttDropoutModel(
+            base_model_class=base_model_class,
+            base_model_params=base_model_params,
+            output_dimensionality=config_obj['OUTPUT_DIMENSIONALITY'],
+            num_heads=num_heads,
+            dropping=config_obj['LOSS_TYPE']['GTCC'],
+            attn_layers=arch['attn_layers'],
+            drop_layers=arch['drop_layers'],
+            use_progress_head=has_progress_head,
+            progress_head_config=progress_head_config,
+        ).to(device)
+    else:
+        model = MultiProngAttDropoutModel(
+            base_model_class=base_model_class,
+            base_model_params=base_model_params,
+            output_dimensionality=config_obj['OUTPUT_DIMENSIONALITY'],
+            num_heads=num_heads,
+            dropping=False,
+            attn_layers=arch['attn_layers'],
+            use_progress_head=has_progress_head,
+            progress_head_config=progress_head_config,
+        ).to(device)
+
+    # Handle DDP checkpoint (remove 'module.' prefix)
+    if list(state_dict.keys())[0].startswith('module.'):
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            new_state_dict[k[7:]] = v
+        state_dict = new_state_dict
+
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model, checkpoint.get('epoch', 0), ckpt_handle
+
+
 def main():
     parser = argparse.ArgumentParser(description='Extract progress values from learnable models')
     parser.add_argument('-f', '--folder', required=True, help='Experiment folder path')
     parser.add_argument('--max_videos', type=int, default=None, help='Max videos per task (for testing)')
+    parser.add_argument('--ckpt', type=str, default='best_model.pt', help='Checkpoint filename (default: best_model.pt)')
+    parser.add_argument('--raw_features_path', type=str, default=None,
+        help='Path to folder containing 2048-d raw feature .npy files (overrides model raw_features)')
     args = parser.parse_args()
 
     folder_to_test = args.folder
@@ -120,11 +241,12 @@ def main():
 
     # Load model
     num_heads = config['ARCHITECTURE']['num_heads'] or len(TASKS)
-    model, epoch, ckpt_handle = get_ckpt_for_eval(
-        ckpt_parent_folder=folder_to_test,
+    model, epoch, ckpt_handle = load_model_for_extraction(
+        folder_to_test=folder_to_test,
         config=config,
         num_heads=num_heads,
-        device=device
+        device=device,
+        ckpt_filename=args.ckpt
     )
 
     if model is None:
@@ -137,6 +259,13 @@ def main():
     if not model.use_progress_head:
         print("[ERROR] This model doesn't have a learnable ProgressHead")
         return
+
+    # Resolve raw features path (from CLI flag or stored config)
+    raw_features_path = args.raw_features_path
+    if raw_features_path is None:
+        raw_features_path = getattr(config, 'RAW_FEATURES_PATH', None)
+    if raw_features_path:
+        print(f"Using 2048-d raw features from: {raw_features_path}")
 
     # Process each task
     for task in TASKS:
@@ -183,8 +312,15 @@ def main():
                 loaded_data.append(v.to(device))
             video_data = loaded_data
 
+            # Load 2048-d raw features from disk if configured
+            raw_feat_tensor = None
+            if raw_features_path:
+                feat_file = os.path.join(raw_features_path, f'{video_name}.npy')
+                if os.path.exists(feat_file):
+                    raw_feat_tensor = torch.from_numpy(np.load(feat_file)).float().to(device)
+
             # Extract progress
-            result = extract_progress_for_video(model, video_data, times_dict)
+            result = extract_progress_for_video(model, video_data, times_dict, raw_features_tensor=raw_feat_tensor)
 
             if result:
                 result['video_name'] = video_name

@@ -513,6 +513,9 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
         num_frames = min(num_target_frames, len(possible_targets))
         target_indices = random.sample(possible_targets, num_frames)
 
+    # Sort by time so results are ordered (needed for monotonicity penalty)
+    target_indices.sort()
+
     results = []
     for target_idx in target_indices:
         # Embeddings from action_start to target_frame (inclusive)

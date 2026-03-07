@@ -75,11 +75,11 @@ class Resnet50Encoder(nn.Module):
             if self.dropping:
                 dout = self.dropout(this_video).mean(dim=0)
                 dropouts.append(dout)
-        
+
+        result = {'outputs': outputs}
         if self.dropping:
-            return {'outputs': outputs, 'dropouts': dropouts}
-        else:
-            return {'outputs': outputs}
+            result['dropouts'] = dropouts
+        return result
 
 class StackingEncoder(nn.Module):
     """

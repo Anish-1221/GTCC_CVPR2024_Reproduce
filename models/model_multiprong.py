@@ -124,7 +124,7 @@ class ProgressHead(nn.Module):
         with torch.no_grad():
             self.fc[-2].bias.fill_(-2.0)
 
-    def forward(self, segment_embeddings):
+    def forward(self, segment_embeddings, dense_output=False):
         T = segment_embeddings.shape[0]
         device = segment_embeddings.device
 
@@ -139,7 +139,6 @@ class ProgressHead(nn.Module):
 
         if self.use_frame_count:
             # Frame count: log-scale normalized (same value for all frames in segment)
-            # This tells the model "you have T frames total"
             # log(1+T) / log(1+max_T) keeps values bounded [0.12, ~1.1] for T in [1, 500]
             fc_value = math.log1p(T) / math.log1p(self.frame_count_max)
             frame_count = torch.full((T, 1), fc_value, device=device, dtype=torch.float32)
@@ -154,10 +153,16 @@ class ProgressHead(nn.Module):
         if self.use_gru:
             x = x.unsqueeze(0)  # (1, T, D+extras)
             if self.use_position_encoding:
-                _, h_n = self.gru(x, self.h0)  # Use learnable h0
+                outputs, h_n = self.gru(x, self.h0)  # Use learnable h0
             else:
-                _, h_n = self.gru(x)  # Legacy: zero h0
-            progress = self.fc(h_n.squeeze())
+                outputs, h_n = self.gru(x)  # Legacy: zero h0
+
+            if dense_output:
+                # Apply FC to all timesteps → per-frame predictions
+                per_frame = self.fc(outputs.squeeze(0))  # (T, H) → (T, 1)
+                return per_frame.squeeze(-1)  # (T,)
+            else:
+                progress = self.fc(h_n.squeeze())
         else:
             x = x.mean(dim=0)
             progress = self.fc(x)
@@ -246,22 +251,20 @@ class TransformerProgressHead(nn.Module):
 
         return alibi_bias
 
-    def forward(self, segment_embeddings):
+    def forward(self, segment_embeddings, dense_output=False):
         """
         Args:
             segment_embeddings: (T, input_dim) - variable length sequence
+            dense_output: if True, return per-frame predictions (T,) instead of scalar
 
         Returns:
-            progress: scalar [0, 1]
+            progress: scalar [0, 1] or (T,) if dense_output=True
         """
         T = segment_embeddings.shape[0]
         device = segment_embeddings.device
 
         # Add frame count feature if enabled
         if self.use_frame_count:
-            # Frame count: log-scale normalized (same value for all frames in segment)
-            # This tells the model "you have T frames total"
-            # log(1+T) / log(1+max_T) keeps values bounded for variable T
             fc_value = math.log1p(T) / math.log1p(self.frame_count_max)
             frame_count = torch.full((T, 1), fc_value, device=device, dtype=segment_embeddings.dtype)
             segment_embeddings = torch.cat([segment_embeddings, frame_count], dim=1)
@@ -269,7 +272,10 @@ class TransformerProgressHead(nn.Module):
         # Handle single frame case
         if T == 1:
             x = self.input_proj(segment_embeddings)  # (1, d_model)
-            return self.output_mlp(x.squeeze(0)).squeeze()
+            result = self.output_mlp(x.squeeze(0)).squeeze()
+            if dense_output:
+                return result.unsqueeze(0)  # (1,)
+            return result
 
         # 1. Input projection
         x = self.input_proj(segment_embeddings)  # (T, d_model)
@@ -285,13 +291,15 @@ class TransformerProgressHead(nn.Module):
         for layer in self.layers:
             x = layer(x, causal_mask, alibi_bias)
 
-        # 5. Take last token (causal aggregation)
-        final = x[0, -1, :]  # (d_model,)
-
-        # 6. Output MLP
-        progress = self.output_mlp(final)
-
-        return progress.squeeze()
+        if dense_output:
+            # Apply output MLP to all positions
+            per_frame = self.output_mlp(x.squeeze(0))  # (T, d_model) → (T, 1)
+            return per_frame.squeeze(-1)  # (T,)
+        else:
+            # Take last token (causal aggregation)
+            final = x[0, -1, :]  # (d_model,)
+            progress = self.output_mlp(final)
+            return progress.squeeze()
 
 
 class TransformerBlockWithALiBi(nn.Module):
@@ -434,22 +442,20 @@ class DilatedConvProgressHead(nn.Module):
         with torch.no_grad():
             self.output_mlp[-2].bias.fill_(-2.0)
 
-    def forward(self, segment_embeddings):
+    def forward(self, segment_embeddings, dense_output=False):
         """
         Args:
             segment_embeddings: (T, input_dim) - variable length sequence
+            dense_output: if True, return per-frame predictions (T,) instead of scalar
 
         Returns:
-            progress: scalar [0, 1]
+            progress: scalar [0, 1] or (T,) if dense_output=True
         """
         T = segment_embeddings.shape[0]
         device = segment_embeddings.device
 
         # Add frame count feature if enabled
         if self.use_frame_count:
-            # Frame count: log-scale normalized (same value for all frames in segment)
-            # This tells the model "you have T frames total"
-            # log(1+T) / log(1+max_T) keeps values bounded for variable T
             fc_value = math.log1p(T) / math.log1p(self.frame_count_max)
             frame_count = torch.full((T, 1), fc_value, device=device, dtype=segment_embeddings.dtype)
             segment_embeddings = torch.cat([segment_embeddings, frame_count], dim=1)
@@ -457,7 +463,10 @@ class DilatedConvProgressHead(nn.Module):
         # Handle single frame case
         if T == 1:
             x = self.input_proj(segment_embeddings)  # (1, hidden_dim)
-            return self.output_mlp(x.squeeze(0)).squeeze()
+            result = self.output_mlp(x.squeeze(0)).squeeze()
+            if dense_output:
+                return result.unsqueeze(0)  # (1,)
+            return result
 
         # 1. Input projection
         x = self.input_proj(segment_embeddings)  # (T, hidden_dim)
@@ -469,13 +478,15 @@ class DilatedConvProgressHead(nn.Module):
         for block in self.blocks:
             x = block(x)
 
-        # 4. Take last position (causal)
-        final = x[0, :, -1]  # (hidden_dim,)
-
-        # 5. Output MLP
-        progress = self.output_mlp(final)
-
-        return progress.squeeze()
+        if dense_output:
+            # Apply output MLP to all positions
+            per_frame = self.output_mlp(x.squeeze(0).transpose(0, 1))  # (T, H) → (T, 1)
+            return per_frame.squeeze(-1)  # (T,)
+        else:
+            # Take last position (causal)
+            final = x[0, :, -1]  # (hidden_dim,)
+            progress = self.output_mlp(final)
+            return progress.squeeze()
 
 
 class CausalDilatedResidualBlock(nn.Module):
@@ -569,14 +580,21 @@ class MultiProngAttDropoutModel(nn.Module):
         # Progress head (for learnable progress loss)
         self.use_progress_head = use_progress_head
         if use_progress_head and progress_head_config is not None:
+            # Determine input_dim based on feature source
+            progress_input_dim = output_dimensionality  # default: 128 (aligned)
+            if progress_head_config.get('features') == 'raw':
+                # 2048-d pre-computed features loaded from disk (no alignment influence)
+                progress_input_dim = 2048
             # Use factory function to create the appropriate ProgressHead
             self.progress_head = create_progress_head(
-                input_dim=output_dimensionality,
+                input_dim=progress_input_dim,
                 config=progress_head_config
             )
 
     def forward(self, videos):
-        general_features = self.base_model(videos)['outputs']
+        base_output = self.base_model(videos)
+        general_features = base_output['outputs']
+        raw_features = base_output.get('raw_features', None)
         prong_outputs = [prong(general_features) for prong in self.head_models]
         prong_outputs = list(map(list, zip(*prong_outputs))) # list transpose to get (batch, video_heads)
         outputs = []
@@ -598,6 +616,8 @@ class MultiProngAttDropoutModel(nn.Module):
         result = {'outputs': outputs, 'attentions': attentions}
         if self.dropping:
             result['dropouts'] = dropouts
+        if raw_features is not None:
+            result['raw_features'] = raw_features
         if self.use_progress_head:
             result['progress_head'] = self.progress_head
         return result

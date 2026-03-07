@@ -94,6 +94,9 @@ CONFIG.PROGRESS_LOSS = edict({
             'dropout': 0.1,
         },
 
+        # Feature source: 'aligned' (128-d post-encoder) or 'raw' (512-d pre-alignment for resnet50)
+        'features': 'aligned',
+
         # Frame count feature (shared across all architectures)
         'use_frame_count': True,     # Add log-scale frame count as input feature
         'frame_count_max': 300.0,    # Normalization factor: log(1+T)/log(1+max)
@@ -106,10 +109,23 @@ CONFIG.PROGRESS_LOSS = edict({
         'min_target_frames': 5,      # Minimum target frames per action
         'max_target_frames': 30,     # Maximum target frames per action
         'stratified_sampling': True, # Ensure early/mid/late parts of actions are covered
+
+        # Loss formulation mode: 'uniform_mono' (default), 'sqrt_weighted', 'mse', 'legacy', 'dense'
+        # 'dense': per-frame MSE on full action segments (disables frame_count automatically)
+        'progress_loss_mode': 'legacy',
+
+        # Legacy loss config (used when progress_loss_mode='legacy')
         'weighted_loss': True,       # Weight early frame errors more heavily
-        'weight_cap': 20.0,          # Maximum weight for early frames (increased from 10)
+        'weight_cap': 20.0,          # Maximum weight for early frames
         'boundary_loss': True,       # Explicit supervision for first/last frames of actions
         'boundary_weight': 5.0,      # Weight multiplier for boundary loss
+
+        # Monotonicity penalty config (used when progress_loss_mode='uniform_mono')
+        'monotonicity_weight': 2.0,  # Weight for monotonicity penalty
+        'monotonicity_margin': 0.01, # Minimum expected increase between consecutive predictions
+
+        # Endpoint loss config (used when progress_loss_mode='uniform_mono' or 'mse')
+        'endpoint_weight': 1.0,      # Weight for endpoint regularization (last frame → 1.0)
 
     },
 })

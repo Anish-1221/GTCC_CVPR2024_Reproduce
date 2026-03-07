@@ -99,6 +99,28 @@ def get_generic_config(multi_task_setting=False, delta=None, n_components=None):
         progress_arch = args_given.get('progress_arch', 'gru')
         CONFIG.PROGRESS_LOSS['learnable']['architecture'] = progress_arch
 
+    # Progress loss formulation mode
+    progress_loss_mode = args_given.get('progress_loss_mode', 'uniform_mono')
+    CONFIG.PROGRESS_LOSS['learnable']['progress_loss_mode'] = progress_loss_mode
+
+    # Dense mode: disable frame_count feature (removes length shortcut)
+    if progress_loss_mode == 'dense':
+        CONFIG.PROGRESS_LOSS['learnable']['use_frame_count'] = False
+
+    # Feature source for progress head: 'aligned' (128-d) or 'raw' (2048-d from disk)
+    progress_features = args_given.get('progress_features', 'aligned')
+    CONFIG.PROGRESS_LOSS['learnable']['features'] = progress_features
+
+    # Path to raw 2048-d features folder (required when progress_features='raw')
+    CONFIG.RAW_FEATURES_PATH = args_given.get('raw_features_path', None)
+
+    # Progress-head-only training configuration
+    CONFIG.TRAIN_PROGRESS_ONLY = args_given.get('train_progress_only', False)
+    CONFIG.ALIGNMENT_CHECKPOINT = args_given.get('alignment_checkpoint', None)
+    CONFIG.PROGRESS_LR = float(args_given.get('progress_lr', 1e-3))
+    CONFIG.PROGRESS_EPOCHS = int(args_given.get('progress_epochs', 50))
+    CONFIG.REINIT_PROGRESS_HEAD = args_given.get('reinit_progress_head', False)
+
     # output folders related items
     CONFIG.EVAL_PLOTFOLDER = f'{output_path}/{output_foldername}'
     CONFIG.VERSION = version
