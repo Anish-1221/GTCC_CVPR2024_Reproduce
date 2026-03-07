@@ -957,7 +957,7 @@ def progress_head_training_loop(
             except Exception as e:
                 skipped_exception += 1
                 if local_rank == 0 and skipped_exception < 5:
-                    logger.warning(f"Skipping batch in task {task}: {type(e).__name__}")
+                    logger.warning(f"Skipping batch in task {task}: {type(e).__name__}: {e}")
                 try:
                     del output_dict
                 except:

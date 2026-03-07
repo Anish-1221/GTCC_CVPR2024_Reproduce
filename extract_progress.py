@@ -165,6 +165,11 @@ def load_model_for_extraction(folder_to_test, config, num_heads, device, ckpt_fi
                 'use_frame_count': use_frame_count,
                 'frame_count_max': learnable_cfg.get('frame_count_max', 300.0),
                 'features': features_source,
+                # V9 anti-saturation fields
+                'use_input_projection': learnable_cfg.get('use_input_projection', False),
+                'projection_dim': learnable_cfg.get('projection_dim', 128),
+                'output_activation': learnable_cfg.get('output_activation', 'sigmoid'),
+                'per_frame_count': learnable_cfg.get('per_frame_count', False),
             }
 
     # Build model

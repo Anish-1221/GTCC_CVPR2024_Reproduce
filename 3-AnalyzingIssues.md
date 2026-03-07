@@ -32,32 +32,48 @@ Root cause: GRU hidden_dim=64 overwhelmed by 32:1 compression ratio (2048→64).
 
 ---
 
-## Step 0: Git Housekeeping
+## Step 0: Git Housekeeping -- DONE
 
 1. Commit and push all current changes to `main`
 2. Create new branch `progress_changes` for all subsequent work
 
 ---
 
-## Step 1: Fix Early Saturation Architecture (Priority 1)
+## Step 1: Fix Early Saturation Architecture (Priority 1) -- V9 CHANGES -- DONE
 
-All changes in `models/model_multiprong.py` and `configs/generic_config.py`.
+All changes in `models/model_multiprong.py`, `configs/generic_config.py`, `configs/entry_config.py`, `utils/parser_util.py`.
 
-### 1a. Input Projection Layer (2048→128)
+### 1a. Input Projection Layer (2048→128) -- DONE
 Add `nn.Linear(2048, 128)` before the GRU. Reduces compression ratio from 32:1 to 1:1. The GRU processes semantically compressed features, not raw high-dimensional noise.
+CLI flag: `--use_input_projection --projection_dim 128`
 
-### 1b. Wider GRU Hidden State (64→128)
+### 1b. Wider GRU Hidden State (64→128) -- DONE
 Doubles the "notebook space" for tracking temporal evolution. Balanced with 128-d projected input.
+CLI flag: `--progress_hidden_dim 128`
 
-### 1c. Replace Sigmoid with Clamped Linear
+### 1c. Replace Sigmoid with Clamped Linear -- DONE
 Remove `nn.Sigmoid()` from FC output. Apply `torch.clamp(output, 0, 1)` in forward instead. Removes the compression penalty that makes progress >0.80 disproportionately hard to achieve. Equal gradient flow at all output levels.
+CLI flag: `--output_activation clamp`
 
-### 1d. Per-Frame Running Count (for GRU anti-saturation only)
+### 1d. Per-Frame Running Count (for GRU anti-saturation only) -- DONE
 Change frame_count from broadcast `log(1+T)/log(1+300)` (same for all frames) to per-frame `log(1+i)/log(1+300)` (unique per frame). This breaks GRU update gate saturation within a forward pass. Document honestly that this does NOT resolve length ambiguity.
+CLI flag: `--per_frame_count`
 
-**Files**:
-- `models/model_multiprong.py` — ProgressHead class: add input_proj, change hidden_dim, replace sigmoid, modify frame_count
-- `configs/generic_config.py` — add `input_projection: true`, `hidden_dim: 128`, `output_activation: 'clamp'`
+### 1e. Skip Alignment Checkpoint for Raw Features -- DONE
+When `--progress_features raw`, the 2048-d features come from disk and the encoder is not in the progress forward path. Removed the requirement for `--alignment_checkpoint` in this case.
+
+**Files modified**:
+- `models/model_multiprong.py` — ProgressHead class: input_proj, hidden_dim, output_activation, per_frame_count; create_progress_head() factory updated
+- `configs/generic_config.py` — new defaults: use_input_projection, projection_dim, output_activation, per_frame_count
+- `configs/entry_config.py` — propagate new V9 flags to CONFIG
+- `utils/parser_util.py` — new CLI args: --use_input_projection, --projection_dim, --progress_hidden_dim, --output_activation, --per_frame_count
+- `multitask_train.py` — skip checkpoint requirement when --progress_features raw
+- `models/alignment_training_loop.py` — improved error logging (show full error message)
+- `extract_progress.py` — added V9 config keys (use_input_projection, projection_dim, output_activation, per_frame_count) to load_model_for_extraction() GRU branch so checkpoint loading reconstructs correct architecture
+
+**Commits**:
+- `048b71e` — V9 anti-saturation architecture: input projection, wider GRU, clamped linear, per-frame count
+- `dfb3076` — Skip alignment checkpoint requirement when using raw features
 
 ---
 
@@ -128,20 +144,53 @@ Implement better metrics that reveal temporal understanding even if OGPE is marg
 
 ## Execution Order
 
-### Round 1: Architecture fixes only (Step 1)
-1. **Git**: commit+push current changes to `main` → create `progress_changes` branch
-2. **Implement Step 1** (all 4 sub-fixes together): input projection, wider GRU, clamped linear, per-frame running count
-3. **Train**: Progress-only on frozen encoder with dense supervision + raw 2048-d features
-4. **Evaluate**: Extract progress, check if saturation is resolved (gradual 0→1 curves, not plateau at 0.73)
+### Round 1: Architecture fixes only (Step 1) -- IN PROGRESS
+1. **Git**: commit+push current changes to `main` → create `progress_changes` branch -- DONE
+2. **Implement Step 1** (all 4 sub-fixes together): input projection, wider GRU, clamped linear, per-frame running count -- DONE
+3. **Train**: Progress-only on frozen encoder with dense supervision + raw 2048-d features -- IN PROGRESS
+4. **Evaluate**: Extract progress, check if saturation is resolved (gradual 0→1 curves, not plateau at 0.73) -- PENDING
 
 ```bash
-CUDA_VISIBLE_DEVICES=X python multitask_train.py 1 --gtcc --egoprocel --resnet --mcn \
+CUDA_VISIBLE_DEVICES=2 python multitask_train.py 1 --gtcc --egoprocel --resnet --mcn \
   --progress_loss learnable --progress_lambda 500000.0 \
   --train_progress_only --reinit_progress_head \
-  --alignment_checkpoint output_learnable_progress_v7/multi-task-setting_val/V1___GTCC_egoprocel/ckpt/best_model.pt \
   --progress_lr 0.001 --progress_epochs 50 \
-  --progress_loss_mode dense --progress_features raw
+  --progress_loss_mode dense --progress_features raw \
+  --raw_features_path /vision/anishn/GTCC_Data_Processed_1fps_2048/egoprocel/features \
+  --use_input_projection --projection_dim 128 --progress_hidden_dim 128 \
+  --output_activation clamp --per_frame_count
 ```
+
+### V9 Early Training Observations (2026-03-06)
+- Loss drops from 0.388 → 0.05 within first 4 batches, stabilizes around 0.05-0.08
+- Constant 0.5 baseline MSE = 1/12 ~ 0.083, so loss **below** this floor means model is learning beyond constant prediction
+- Previous V6/V7 also dropped fast but saturated — need to check final predictions for gradual 0→1 curves
+- **Status: TRAINING IN PROGRESS**
+
+### V9 Intermediary Epoch-10 Results After Comparison (2026-03-07)
+
+Compared V9 (epoch 10/50, val loss 0.0231) against V6 across 6 overlapping test videos (2 BaconAndEggs, 4 Sandwich). All segments >= 15 frames analyzed.
+
+**What V9 fixes — saturation dynamics:**
+- Mean absolute delta (MAD) in the 2nd half of segments is **2x to 700x higher** than V6
+- V6 effectively flatlines after frame ~10 (MAD < 0.001); V9 keeps adjusting (MAD 0.003-0.006)
+- Longest segments (731, 180, 149, 117 frames) show biggest improvement — V6 deltas are ~0.0000x, V9 still at 0.003-0.006
+- Late-stage MAD (last 20%) ratios: 3x-320x improvement over V6
+
+**What V9 does NOT fix — ceiling problem:**
+- Neither V6 nor V9 ever reaches 0.9, let alone 1.0. Both cap out around **0.77-0.83**
+- Gap-to-1.0 is nearly identical: V6 avg ~0.19, V9 avg ~0.19
+- Both still jump to 0.7+ within first 1-3 frames, then crawl slowly to ~0.83
+- The curve shape is still wrong: should be gradual 0→1 ramp, not 0→0.7 jump + slow crawl
+
+**Example (731-frame segment, BaconAndEggs OP01-R03):**
+- V6: last=0.8251, MAD last 20%=0.000066 (frozen)
+- V9: last=0.8689, MAD last 20%=0.005718 (87x more active)
+- But neither approaches 1.0
+
+**Conclusion:** V9 fixes the saturation *mechanism* (model keeps learning throughout the sequence) but not the *ceiling* (model treats ~0.8 as "done"). The ceiling problem is fundamentally about disambiguation — without knowing "this action typically takes N frames", the model can't map frame N/N to 1.0. This confirms **Round 2 (action-class conditioning)** is needed.
+
+**Decision:** Let training finish (epoch 10/50, loss still decreasing), then proceed to Round 2 regardless of final epoch results.
 
 ### Round 2: Add disambiguation (only if Round 1 fixes saturation but progress still not good)
 5. **Step 2**: Action-class conditioning
