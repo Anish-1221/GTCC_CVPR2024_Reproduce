@@ -237,39 +237,45 @@ if __name__ == '__main__':
     train_progress_only = getattr(CFG, 'TRAIN_PROGRESS_ONLY', False)
 
     if train_progress_only:
-        # Load alignment checkpoint
         alignment_ckpt_path = getattr(CFG, 'ALIGNMENT_CHECKPOINT', None)
-        if alignment_ckpt_path is None:
-            raise ValueError("--train_progress_only requires --alignment_checkpoint <path>")
+        uses_raw_features = CFG.PROGRESS_LOSS.get('learnable', {}).get('features') == 'raw'
 
-        if local_rank == 0:
-            logger.info(f"Loading alignment checkpoint from: {alignment_ckpt_path}")
-
-        checkpoint = torch.load(alignment_ckpt_path, map_location=device)
-        model_to_load = model.module if hasattr(model, 'module') else model
-
-        # Load state dict, allowing missing progress_head keys (will be randomly initialized)
-        state_dict = checkpoint['model_state_dict']
-        # Remove DDP 'module.' prefix if present in checkpoint but not in model
-        cleaned_state_dict = {}
-        for k, v in state_dict.items():
-            new_key = k.replace('module.', '') if k.startswith('module.') else k
-            cleaned_state_dict[new_key] = v
-
-        # If reinit_progress_head, exclude progress_head keys from checkpoint
-        reinit_progress = getattr(CFG, 'REINIT_PROGRESS_HEAD', False)
-        if reinit_progress:
-            cleaned_state_dict = {k: v for k, v in cleaned_state_dict.items()
-                                  if 'progress_head' not in k}
+        if alignment_ckpt_path is not None:
+            # Load alignment checkpoint for encoder weights
             if local_rank == 0:
-                logger.info("Reinitializing progress head from scratch (bias=-2.0)")
+                logger.info(f"Loading alignment checkpoint from: {alignment_ckpt_path}")
 
-        missing, unexpected = model_to_load.load_state_dict(cleaned_state_dict, strict=False)
-        if local_rank == 0:
-            if missing:
-                logger.info(f"Missing keys (will be randomly initialized): {missing}")
-            if unexpected:
-                logger.warning(f"Unexpected keys in checkpoint: {unexpected}")
+            checkpoint = torch.load(alignment_ckpt_path, map_location=device)
+            model_to_load = model.module if hasattr(model, 'module') else model
+
+            # Load state dict, allowing missing progress_head keys (will be randomly initialized)
+            state_dict = checkpoint['model_state_dict']
+            # Remove DDP 'module.' prefix if present in checkpoint but not in model
+            cleaned_state_dict = {}
+            for k, v in state_dict.items():
+                new_key = k.replace('module.', '') if k.startswith('module.') else k
+                cleaned_state_dict[new_key] = v
+
+            # If reinit_progress_head, exclude progress_head keys from checkpoint
+            reinit_progress = getattr(CFG, 'REINIT_PROGRESS_HEAD', False)
+            if reinit_progress:
+                cleaned_state_dict = {k: v for k, v in cleaned_state_dict.items()
+                                      if 'progress_head' not in k}
+                if local_rank == 0:
+                    logger.info("Reinitializing progress head from scratch (bias=-2.0)")
+
+            missing, unexpected = model_to_load.load_state_dict(cleaned_state_dict, strict=False)
+            if local_rank == 0:
+                if missing:
+                    logger.info(f"Missing keys (will be randomly initialized): {missing}")
+                if unexpected:
+                    logger.warning(f"Unexpected keys in checkpoint: {unexpected}")
+        elif uses_raw_features:
+            # Raw features come from disk — encoder not needed, skip checkpoint
+            if local_rank == 0:
+                logger.info("Using raw features from disk — no alignment checkpoint needed")
+        else:
+            raise ValueError("--train_progress_only requires --alignment_checkpoint <path> (unless --progress_features raw)")
 
         progress_head_training_loop(
             model,
