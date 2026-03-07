@@ -221,9 +221,23 @@ Training completed at ~05:00 UTC. Extraction via `extract_progress.py` completed
 **Conclusion:** V9 partially fixes the saturation problem (model stays active, ceilings raised to 0.90 on long segments) but the curve shape is fundamentally unchanged — early jump dominates, and the model lacks disambiguation signal to know "how far through" an action it is. This confirms **Round 2 (action-class conditioning)** is the critical next step.
 
 ### Round 2: Add disambiguation -- IN PROGRESS
-5. **Step 2**: Action-class conditioning (nn.Embedding for action types)
-6. **Step 4**: Rate-of-change features (frame-to-frame L2 distance)
-7. **Re-train & evaluate**
+5. **Step 2**: Action-class conditioning (nn.Embedding for action types) -- DONE
+6. **Step 4**: Rate-of-change features (frame-to-frame L2 distance) -- DONE
+7. **Train V10**: Progress-only on frozen encoder with dense supervision + raw 2048-d + action conditioning + rate-of-change -- PENDING
+8. **Evaluate**: Extract progress, compare V10 vs V9 vs V6 -- PENDING
+
+```bash
+CUDA_VISIBLE_DEVICES=2 python multitask_train.py 1 --gtcc --egoprocel --resnet --mcn \
+  --progress_loss learnable --progress_lambda 500000.0 \
+  --train_progress_only --reinit_progress_head \
+  --progress_lr 0.0003 --progress_epochs 50 \
+  --progress_loss_mode dense --progress_features raw \
+  --raw_features_path /vision/anishn/GTCC_Data_Processed_1fps_2048/egoprocel/features \
+  --use_input_projection --projection_dim 128 --progress_hidden_dim 128 \
+  --output_activation clamp --per_frame_count \
+  --use_action_conditioning --action_embed_dim 16 \
+  --use_rate_of_change
+```
 
 ### Round 3: Additional refinement (only if needed)
 8. **Step 3**: Auxiliary length estimation head
