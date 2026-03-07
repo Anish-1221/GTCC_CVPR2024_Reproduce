@@ -409,7 +409,8 @@ def sample_action_segment_with_random_index(embeddings, times_dict, min_segment_
 
 def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segment_len=3, frames_per_segment=3,
                                                 stratified=False, target_action_idx=None,
-                                                adaptive_frames=False, min_target_frames=5, max_target_frames=30):
+                                                adaptive_frames=False, min_target_frames=5, max_target_frames=30,
+                                                return_action_name=False):
     """
     Sample a random non-SIL action (or a specific one), then sample multiple target frames within that action.
     For each target frame, return embeddings from action_start to target_frame.
@@ -439,7 +440,7 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
             valid_actions.append((idx, step, start, end))
 
     if len(valid_actions) == 0:
-        return []
+        return ([], None) if return_action_name else []
 
     # Select action: either specified by target_action_idx or random
     if target_action_idx is not None:
@@ -474,7 +475,7 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
 
     possible_targets = list(range(min_target, action_end + 1))
     if len(possible_targets) == 0:
-        return []
+        return ([], action_name) if return_action_name else []
 
     if stratified and len(possible_targets) >= 3:
         # Stratified sampling: ensure coverage of early, mid, late parts
@@ -527,7 +528,7 @@ def sample_action_segment_with_multiple_frames(embeddings, times_dict, min_segme
         gt_progress = min(1.0, max(0.0, progress_at_target))
         results.append((segment_embeddings, gt_progress))
 
-    return results
+    return (results, action_name) if return_action_name else results
 
 
 def flatten_dataloader_and_get_dict(model, dl, skip_rate=None, device='cpu'):

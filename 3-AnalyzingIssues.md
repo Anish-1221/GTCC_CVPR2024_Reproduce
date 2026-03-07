@@ -77,26 +77,52 @@ When `--progress_features raw`, the 2048-d features come from disk and the encod
 
 ---
 
-## Step 2: Action-Class Conditioning (Alternative A — Strongest Signal)
+## Step 2: Action-Class Conditioning (Alternative A — Strongest Signal) -- V10 CHANGES -- DONE
 
-The most impactful addition per the analysis. If the model knows "this is chop_vegetables", it can learn that chopping typically takes 15-40 frames → seeing 5 frames → "probably 12-33% through."
+### Why Action-Class Conditioning?
 
-### Implementation
-- Add `nn.Embedding(num_actions, 16)` to ProgressHead
-- Concatenate 16-d action embedding to each frame's features
-- During training: use GT action labels from `hdl_actions` in `dset_jsons/egoprocel.json`
-- During eval: use GT action labels (OGPE evaluation already uses GT segmentation boundaries — using GT action class is defensible and consistent)
+The core problem V9 still has — even after fixing saturation — is **disambiguation**. The progress head sees a sequence of visual features and must predict "how far through this action are we?" But without knowing *which* action is happening, the model cannot answer this question:
 
-### Data Flow
-- `dset_jsons/egoprocel.json` already has `hdl_actions` per video → action names per segment
-- Need to build action-to-index mapping (one-time)
-- Pass action index through `loss_entry.py` to `progress_head.forward(segment_emb, action_idx)`
+**The ambiguity problem:** Consider two actions with identical visual features at frame 5:
+- "crack_egg" (typically 8 frames total) → frame 5 = 62.5% done
+- "stir_pot" (typically 120 frames total) → frame 5 = 4.2% done
 
-**Files**:
-- `models/model_multiprong.py` — add action embedding to ProgressHead
-- `utils/loss_entry.py` — pass action label when calling progress_head
-- `models/json_dataset.py` — ensure action labels available in batch
-- `extract_progress.py` — pass action label during inference
+Without action identity, the GRU can only learn an **average** progress curve across all action types. This average curve is dominated by the action length distribution in the training data, which is why:
+1. **Early jump to ~0.7**: The model learns that most actions are short (median ~10 frames), so seeing 3+ frames means "probably almost done" on average
+2. **Ceiling below 1.0**: The model hedges — it can't confidently predict 1.0 because some actions with similar features at frame N could have 3x more frames remaining
+3. **Same curve for everything**: V6 and V9 both produce nearly identical curves for all segments regardless of action type or length
+
+**How action conditioning fixes this:** By telling the model "this is action class 42 (e.g., chop_vegetables)", the embedding gives the GRU a **lookup key** for action-specific duration statistics learned during training:
+- "Action 42 typically takes 15-40 frames" → seeing 5 frames → "~25% through" (not 70%)
+- "Action 7 typically takes 5-8 frames" → seeing 5 frames → "~75% through"
+- The model can now learn separate progress curves per action class, with proper 0→1 ramps
+
+**Why GT labels are defensible:** OGPE evaluation already uses GT segmentation boundaries (the model doesn't detect action boundaries, it receives them). Using GT action labels is consistent — we're measuring progress *within* known segments, not detecting actions. This matches the ProTAS/GTCC evaluation protocol.
+
+### Implementation -- DONE
+- Added `nn.Embedding(num_actions=116, action_embed_dim=16)` to ProgressHead
+- Concatenate 16-d action embedding to each frame's features before GRU
+- During training: action labels extracted from `vid_times['step']` in loss functions, converted to int via `_action_label_to_idx()`
+- During eval/extraction: action labels from `times_dict['step']`, passed as `action_idx` to progress_head
+- Backward compatible: `action_idx=None` falls back to index 0 (unknown/background)
+- CLI flags: `--use_action_conditioning`, `--action_embed_dim 16`
+
+### Data Flow -- DONE
+- Action labels already present in `times_dict['step']` (no dataset changes needed)
+- `_action_label_to_idx(step)` helper in `loss_entry.py`: converts string labels to int, guards against "SIL"/"background"
+- All 5 loss modes updated to pass `action_idx` to `progress_head()` calls
+- `sample_action_segment_with_multiple_frames()` extended with `return_action_name=True` option (backward compatible)
+- `extract_progress.py` passes `action_idx` during frame-by-frame inference
+
+**Files modified**:
+- `models/model_multiprong.py` — ProgressHead: action_embedding, rate-of-change; create_progress_head() factory updated
+- `utils/loss_entry.py` — `_action_label_to_idx()` helper, all 5 loss modes pass action_idx
+- `utils/tensorops.py` — `sample_action_segment_with_multiple_frames()` optional `return_action_name` param
+- `utils/parser_util.py` — new CLI args: --use_action_conditioning, --action_embed_dim, --use_rate_of_change
+- `configs/generic_config.py` — new defaults for V10 flags
+- `configs/entry_config.py` — propagate V10 flags to CONFIG
+- `extract_progress.py` — pass action_idx during inference, V10 config keys in load_model_for_extraction()
+- `utils/train_util.py` — GRU checkpoint loading reads V9+V10 config from stored checkpoint
 
 ---
 
@@ -115,17 +141,13 @@ Add second output neuron: predict both progress AND estimated total action lengt
 
 ---
 
-## Step 4: Rate-of-Change Features (Alternative C — Cheap Supplement)
+## Step 4: Rate-of-Change Features (Alternative C — Cheap Supplement) -- V10 CHANGES -- DONE
 
-Concatenate frame-to-frame L2 distance as extra scalar input. Actions have characteristic velocity profiles (fast at transitions, slow in middle).
+Concatenate frame-to-frame L2 distance as extra scalar input. Actions have characteristic velocity profiles (fast at transitions, slow in middle). Computed on projected features (post input_proj, 128-d), not raw 2048-d.
 
-```python
-diffs = torch.zeros(T, 1, device=device)
-diffs[1:] = torch.norm(segment_emb[1:] - segment_emb[:-1], dim=1, keepdim=True)
-features_to_concat.append(diffs)
-```
+CLI flag: `--use_rate_of_change`
 
-**Files**: `models/model_multiprong.py` — 3 lines in ProgressHead.forward()
+**Files**: `models/model_multiprong.py` — ProgressHead.__init__ and forward()
 
 ---
 
@@ -144,11 +166,11 @@ Implement better metrics that reveal temporal understanding even if OGPE is marg
 
 ## Execution Order
 
-### Round 1: Architecture fixes only (Step 1) -- IN PROGRESS
+### Round 1: Architecture fixes only (Step 1) -- DONE
 1. **Git**: commit+push current changes to `main` → create `progress_changes` branch -- DONE
 2. **Implement Step 1** (all 4 sub-fixes together): input projection, wider GRU, clamped linear, per-frame running count -- DONE
-3. **Train**: Progress-only on frozen encoder with dense supervision + raw 2048-d features -- IN PROGRESS
-4. **Evaluate**: Extract progress, check if saturation is resolved (gradual 0→1 curves, not plateau at 0.73) -- PENDING
+3. **Train**: Progress-only on frozen encoder with dense supervision + raw 2048-d features -- DONE (50/50 epochs, completed 2026-03-07)
+4. **Evaluate**: Extract progress, compare V9 vs V6 -- DONE
 
 ```bash
 CUDA_VISIBLE_DEVICES=2 python multitask_train.py 1 --gtcc --egoprocel --resnet --mcn \
@@ -161,40 +183,46 @@ CUDA_VISIBLE_DEVICES=2 python multitask_train.py 1 --gtcc --egoprocel --resnet -
   --output_activation clamp --per_frame_count
 ```
 
-### V9 Early Training Observations (2026-03-06)
-- Loss drops from 0.388 → 0.05 within first 4 batches, stabilizes around 0.05-0.08
-- Constant 0.5 baseline MSE = 1/12 ~ 0.083, so loss **below** this floor means model is learning beyond constant prediction
-- Previous V6/V7 also dropped fast but saturated — need to check final predictions for gradual 0→1 curves
-- **Status: TRAINING IN PROGRESS**
+### V9 Final Results (Epoch 50/50, 2026-03-07)
 
-### V9 Intermediary Epoch-10 Results After Comparison (2026-03-07)
+Training completed at ~05:00 UTC. Extraction via `extract_progress.py` completed at ~12:55 UTC. Compared V9 against V6 across 5 overlapping test videos (2 BaconAndEggs, 5 Sandwich), 10 segments with length >= 15 frames.
 
-Compared V9 (epoch 10/50, val loss 0.0231) against V6 across 6 overlapping test videos (2 BaconAndEggs, 4 Sandwich). All segments >= 15 frames analyzed.
+**Summary Table:**
 
-**What V9 fixes — saturation dynamics:**
-- Mean absolute delta (MAD) in the 2nd half of segments is **2x to 700x higher** than V6
-- V6 effectively flatlines after frame ~10 (MAD < 0.001); V9 keeps adjusting (MAD 0.003-0.006)
-- Longest segments (731, 180, 149, 117 frames) show biggest improvement — V6 deltas are ~0.0000x, V9 still at 0.003-0.006
-- Late-stage MAD (last 20%) ratios: 3x-320x improvement over V6
+| Metric | V6 | V9 (epoch 50) | Change |
+|--------|-----|---------------|--------|
+| Avg gap-to-1.0 (final pred) | 0.1748 | 0.1441 | **17.6% closer to 1.0** |
+| Segments exceeding 0.90 max | 0/10 | 3/10 | **Ceiling partially broken** |
+| 2nd-half MAD (avg) | baseline | 2.44x higher | **Model keeps adjusting** |
+| Last-20% MAD (avg) | baseline | 7.38x higher | **More active but oscillatory** |
+| Max value range | 0.80-0.84 | 0.82-0.90 | **Higher ceilings** |
 
-**What V9 does NOT fix — ceiling problem:**
-- Neither V6 nor V9 ever reaches 0.9, let alone 1.0. Both cap out around **0.77-0.83**
-- Gap-to-1.0 is nearly identical: V6 avg ~0.19, V9 avg ~0.19
-- Both still jump to 0.7+ within first 1-3 frames, then crawl slowly to ~0.83
-- The curve shape is still wrong: should be gradual 0→1 ramp, not 0→0.7 jump + slow crawl
+**Best improvements on long segments:**
+- S07 Sandwich (138 frames): V6 max=0.83, V9 max=**0.90** (gap reduced by 0.073)
+- S18 Sandwich (149 frames): V6 max=0.83, V9 max=**0.90** (gap reduced by 0.061)
+- OP01 BaconAndEggs (521 frames): V6 max=0.83, V9 max=**0.89** (gap reduced by 0.046)
 
-**Example (731-frame segment, BaconAndEggs OP01-R03):**
-- V6: last=0.8251, MAD last 20%=0.000066 (frozen)
-- V9: last=0.8689, MAD last 20%=0.005718 (87x more active)
-- But neither approaches 1.0
+**What V9 fixes:**
+- Saturation mechanism: model keeps adjusting in 2nd half (2.44x higher MAD), not frozen like V6
+- Ceiling raised: 3/10 segments now exceed 0.90 (V6 never exceeded 0.84)
+- Longer segments benefit most (gap-to-1.0 reduced by 0.05-0.07 for 138-521 frame segments)
 
-**Conclusion:** V9 fixes the saturation *mechanism* (model keeps learning throughout the sequence) but not the *ceiling* (model treats ~0.8 as "done"). The ceiling problem is fundamentally about disambiguation — without knowing "this action typically takes N frames", the model can't map frame N/N to 1.0. This confirms **Round 2 (action-class conditioning)** is needed.
+**What V9 does NOT fix:**
+- **Early jump persists**: ALL 10/10 segments still jump to 0.7-0.87 in first 1-3 frames
+- **Ceiling still below 1.0**: Most segments cap at 0.84-0.87, only 3 reach 0.90+
+- **Increased oscillation**: Last-20% MAD is 7.38x higher than V6 (instability)
+- **Curve shape still wrong**: Should be gradual 0→1 ramp, still 0→0.7 jump + slow crawl
 
-**Decision:** Let training finish (epoch 10/50, loss still decreasing), then proceed to Round 2 regardless of final epoch results.
+**Example (521-frame segment, BaconAndEggs OP01-R03):**
+- V6: first 3 preds=[0.26, 0.65, 0.73], last=0.8259, MAD last 20%=0.0007
+- V9: first 3 preds=[0.30, 0.61, 0.69], last=0.8716, MAD last 20%=0.0051 (7x more active)
+- V9 reaches 0.8869 max but neither approaches 1.0
 
-### Round 2: Add disambiguation (only if Round 1 fixes saturation but progress still not good)
-5. **Step 2**: Action-class conditioning
-6. **Step 4**: Rate-of-change features (trivial, do alongside)
+**Conclusion:** V9 partially fixes the saturation problem (model stays active, ceilings raised to 0.90 on long segments) but the curve shape is fundamentally unchanged — early jump dominates, and the model lacks disambiguation signal to know "how far through" an action it is. This confirms **Round 2 (action-class conditioning)** is the critical next step.
+
+### Round 2: Add disambiguation -- IN PROGRESS
+5. **Step 2**: Action-class conditioning (nn.Embedding for action types)
+6. **Step 4**: Rate-of-change features (frame-to-frame L2 distance)
 7. **Re-train & evaluate**
 
 ### Round 3: Additional refinement (only if needed)

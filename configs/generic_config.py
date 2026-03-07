@@ -83,6 +83,12 @@ CONFIG.PROGRESS_LOSS = edict({
         'output_activation': 'sigmoid',  # 'sigmoid' or 'clamp' (clamped linear)
         'per_frame_count': False,        # Per-frame log(1+i)/log(1+max) instead of broadcast
 
+        # V10 action conditioning + rate-of-change
+        'use_action_conditioning': False, # Add action-class embedding for disambiguation
+        'num_actions': 116,               # 0=unknown/background + 1-115 real actions
+        'action_embed_dim': 16,           # Dimension of action class embedding
+        'use_rate_of_change': False,      # Add frame-to-frame L2 distance as extra input
+
         # Transformer-specific config (used when architecture='transformer')
         'transformer_config': {
             'd_model': 64,

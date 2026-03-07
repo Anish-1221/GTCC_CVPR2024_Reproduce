@@ -183,6 +183,78 @@ These flags enable and configure the learnable progress prediction head.
   - **`dilated_conv`**: Stack of causal dilated convolution blocks (dilations 1,2,4,8,16,32). Hidden dim=64, kernel=3. (`model_multiprong.py` DilatedConvProgressHead class)
 - **Note**: All three architectures are causal — output at position t depends only on frames 0..t
 
+### V9 Architecture Flags (Anti-Saturation)
+
+These flags fix the early saturation problem where the GRU plateaus at ~0.73-0.80 within the first few frames when processing 2048-d raw features.
+
+### `--use_input_projection`
+- **Type**: boolean flag (`store_true`)
+- **Default**: `False`
+- **Config key**: `CONFIG.PROGRESS_LOSS['learnable']['use_input_projection']`
+- **Description**: Add `Linear(input_dim→projection_dim) + ReLU` before the GRU. Reduces the compression ratio from 32:1 (2048→64) to 1:1 (128→128), preventing the GRU from being overwhelmed by high-dimensional input.
+- **Impact**: GRU sees 128-d projected features instead of raw 2048-d. Critical when using `--progress_features raw`.
+
+### `--projection_dim`
+- **Type**: int
+- **Default**: `128`
+- **Config key**: `CONFIG.PROGRESS_LOSS['learnable']['projection_dim']`
+- **Description**: Target dimension for the input projection layer. Only used with `--use_input_projection`.
+
+### `--progress_hidden_dim`
+- **Type**: int
+- **Default**: `64`
+- **Config key**: `CONFIG.PROGRESS_LOSS['learnable']['hidden_dim']`
+- **Description**: GRU hidden state dimension. Use `128` with input projection for balanced capacity (128-d input → 128-d hidden).
+
+### `--output_activation`
+- **Type**: string
+- **Choices**: `sigmoid`, `clamp`
+- **Default**: `sigmoid`
+- **Config key**: `CONFIG.PROGRESS_LOSS['learnable']['output_activation']`
+- **Description**: Output activation function for the progress head.
+  - **`sigmoid`** (default): Classic sigmoid squash. Has gradient compression near 0 and 1, making it disproportionately hard to predict values >0.8.
+  - **`clamp`**: Clamped linear `torch.clamp(output, 0, 1)`. Equal gradient flow at all output levels, allowing the model to reach values close to 1.0 more easily.
+
+### `--per_frame_count`
+- **Type**: boolean flag (`store_true`)
+- **Default**: `False`
+- **Config key**: `CONFIG.PROGRESS_LOSS['learnable']['per_frame_count']`
+- **Description**: Use per-frame running count `log(1+i)/log(1+300)` for each frame i, instead of broadcast frame count `log(1+T)/log(1+300)` (same for all frames). Gives each frame a unique temporal signal, breaking GRU update gate saturation within a forward pass.
+
+### V10 Architecture Flags (Action Conditioning + Rate-of-Change)
+
+### `--use_action_conditioning`
+- **Type**: boolean flag (`store_true`)
+- **Default**: `False`
+- **Config key**: `CONFIG.PROGRESS_LOSS['learnable']['use_action_conditioning']`
+- **Description**: Add an action-class embedding to the progress head input. Tells the model *which* action is happening so it can learn action-specific progress curves. Without this, the model learns one average curve for all actions, causing early jumps to ~0.7 and ceilings below 1.0.
+- **How it works**:
+  - Adds `nn.Embedding(116, 16)` to ProgressHead (116 action classes: 0=unknown + 1-115 real actions)
+  - The 16-d embedding is looked up for the current action class and **broadcast to all frames** in the segment
+  - Concatenated to each frame's features before the GRU
+  - The embedding vectors are **learned during training** — the model discovers action-specific duration patterns
+  - Action labels come from `times_dict['step']` (already available, no dataset changes needed)
+  - Backward compatible: `action_idx=None` falls back to index 0
+- **Impact**: GRU input dimension increases by `action_embed_dim` (default 16). E.g., 129 → 145.
+
+### `--action_embed_dim`
+- **Type**: int
+- **Default**: `16`
+- **Config key**: `CONFIG.PROGRESS_LOSS['learnable']['action_embed_dim']`
+- **Description**: Dimension of the action class embedding vector. Only used with `--use_action_conditioning`.
+
+### `--use_rate_of_change`
+- **Type**: boolean flag (`store_true`)
+- **Default**: `False`
+- **Config key**: `CONFIG.PROGRESS_LOSS['learnable']['use_rate_of_change']`
+- **Description**: Add frame-to-frame L2 distance as an extra scalar input feature. Provides the GRU with an explicit "visual velocity" signal — how much the features are changing between consecutive frames.
+- **How it works**:
+  - Computes `||features[t] - features[t-1]||₂` for each frame (on projected 128-d features)
+  - First frame gets diff=0
+  - Concatenated as a (T, 1) tensor to the feature stack before GRU
+- **Why it helps**: Actions have characteristic velocity profiles. Feature changes are rapid at transitions (start/end of actions) and slow in the middle. This gives the GRU an explicit signal about where in the action the model is, complementing the temporal position from `per_frame_count`.
+- **Impact**: GRU input dimension increases by 1.
+
 ### `--progress_loss_mode`
 - **Type**: string
 - **Choices**: `uniform_mono`, `sqrt_weighted`, `mse`, `legacy`, `dense`
@@ -302,6 +374,9 @@ python extract_progress.py -f <experiment_folder> [--ckpt <filename>] [--max_vid
 | `--progress_loss_mode` | `--progress_loss learnable` | Only affects learnable progress head |
 | `--progress_features raw` | `--raw_features_path <path>` | Needs path to 2048-d feature files on disk |
 | `--progress_features` | `--progress_loss learnable` | Only used with learnable progress head |
+| `--use_input_projection` | `--progress_features raw` (practically) | Needed to reduce 2048→128 before GRU |
+| `--use_action_conditioning` | `--progress_loss learnable` | Only used with learnable progress head |
+| `--use_rate_of_change` | `--progress_loss learnable` | Only used with learnable progress head |
 
 ### Conditional behavior
 - `--gtcc` + `--resnet` + no `--mcn` → enables dropout in resnet50 base encoder
@@ -309,6 +384,8 @@ python extract_progress.py -f <experiment_folder> [--ckpt <filename>] [--max_vid
 - `--progress_loss_mode dense` → automatically sets `use_frame_count=False` (removes length shortcut)
 - `--progress_features raw` → progress head input_dim changes from 128 to 2048; loads features from `--raw_features_path`
 - `--mcn` → creates `MultiProngAttDropoutModel` with attention; without → creates base model directly
+- `--use_action_conditioning` → GRU input dim increases by `action_embed_dim` (default 16)
+- `--use_rate_of_change` → GRU input dim increases by 1
 
 ### Gradient handling
 - **Joint training** (alignment + progress): encoder gradients clipped at `max_norm=0.00001`, progress head gradients clipped separately at `max_norm=1.0` (`alignment_training_loop.py:440-454`)
@@ -362,6 +439,32 @@ python multitask_train.py 1 --gtcc --ego --resnet --mcn \
   --train_progress_only \
   --alignment_checkpoint <path>/ckpt/best_model.pt \
   --progress_lr 0.0001 --progress_epochs 30
+```
+
+### V9: Anti-saturation architecture (raw 2048-d features)
+```bash
+CUDA_VISIBLE_DEVICES=2 python multitask_train.py 1 --gtcc --egoprocel --resnet --mcn \
+  --progress_loss learnable --progress_lambda 500000.0 \
+  --train_progress_only --reinit_progress_head \
+  --progress_lr 0.001 --progress_epochs 50 \
+  --progress_loss_mode dense --progress_features raw \
+  --raw_features_path /vision/anishn/GTCC_Data_Processed_1fps_2048/egoprocel/features \
+  --use_input_projection --projection_dim 128 --progress_hidden_dim 128 \
+  --output_activation clamp --per_frame_count
+```
+
+### V10: Action conditioning + rate-of-change (builds on V9)
+```bash
+CUDA_VISIBLE_DEVICES=2 python multitask_train.py 1 --gtcc --egoprocel --resnet --mcn \
+  --progress_loss learnable --progress_lambda 500000.0 \
+  --train_progress_only --reinit_progress_head \
+  --progress_lr 0.0003 --progress_epochs 50 \
+  --progress_loss_mode dense --progress_features raw \
+  --raw_features_path /vision/anishn/GTCC_Data_Processed_1fps_2048/egoprocel/features \
+  --use_input_projection --projection_dim 128 --progress_hidden_dim 128 \
+  --output_activation clamp --per_frame_count \
+  --use_action_conditioning --action_embed_dim 16 \
+  --use_rate_of_change
 ```
 
 ### Extracting progress predictions

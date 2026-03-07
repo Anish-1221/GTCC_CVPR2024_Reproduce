@@ -101,29 +101,46 @@ def ckpt_restore_mprong(path, num_heads, dropout=False, device='cpu'):
                 }
             }
         elif has_gru:
-            # GRU-based architecture - detect position encoding
+            # GRU-based architecture - read config from stored checkpoint
+            try:
+                learnable_cfg = config_obj['PROGRESS_LOSS']['learnable']
+            except (KeyError, TypeError):
+                learnable_cfg = {}
+
+            # Fall back to auto-detection for old checkpoints without stored config
             gru_key = 'progress_head.gru.weight_ih_l0'
             module_gru_key = 'module.progress_head.gru.weight_ih_l0'
-
-            use_position_encoding = False  # Default to no position encoding (V4+)
-            if gru_key in state_dict:
-                gru_input_dim = state_dict[gru_key].shape[1]
-                # If input_dim is output_dim + 1, it has position encoding
-                use_position_encoding = (gru_input_dim == config_obj['OUTPUT_DIMENSIONALITY'] + 1)
-            elif module_gru_key in state_dict:
-                gru_input_dim = state_dict[module_gru_key].shape[1]
-                use_position_encoding = (gru_input_dim == config_obj['OUTPUT_DIMENSIONALITY'] + 1)
+            use_position_encoding = learnable_cfg.get('use_position_encoding', False)
+            if not use_position_encoding and not learnable_cfg:
+                if gru_key in state_dict:
+                    gru_input_dim = state_dict[gru_key].shape[1]
+                    use_position_encoding = (gru_input_dim == config_obj['OUTPUT_DIMENSIONALITY'] + 1)
+                elif module_gru_key in state_dict:
+                    gru_input_dim = state_dict[module_gru_key].shape[1]
+                    use_position_encoding = (gru_input_dim == config_obj['OUTPUT_DIMENSIONALITY'] + 1)
 
             progress_head_config = {
                 'architecture': 'gru',
-                'hidden_dim': 64,
-                'use_gru': True,
-                'use_position_encoding': use_position_encoding
+                'hidden_dim': learnable_cfg.get('hidden_dim', 64),
+                'use_gru': learnable_cfg.get('use_gru', True),
+                'use_position_encoding': use_position_encoding,
+                'use_frame_count': learnable_cfg.get('use_frame_count', True),
+                'frame_count_max': learnable_cfg.get('frame_count_max', 300.0),
+                # V9 anti-saturation fields
+                'use_input_projection': learnable_cfg.get('use_input_projection', False),
+                'projection_dim': learnable_cfg.get('projection_dim', 128),
+                'output_activation': learnable_cfg.get('output_activation', 'sigmoid'),
+                'per_frame_count': learnable_cfg.get('per_frame_count', False),
+                # V10 action conditioning + rate-of-change
+                'use_action_conditioning': learnable_cfg.get('use_action_conditioning', False),
+                'num_actions': learnable_cfg.get('num_actions', 116),
+                'action_embed_dim': learnable_cfg.get('action_embed_dim', 16),
+                'use_rate_of_change': learnable_cfg.get('use_rate_of_change', False),
             }
             if use_position_encoding:
                 print(f"[INFO] Detected GRU ProgressHead (v3) - loading with position encoding")
             else:
-                print(f"[INFO] Detected GRU ProgressHead (v2/v4) - loading without position encoding")
+                print(f"[INFO] Detected GRU ProgressHead - loading from stored config")
         else:
             # Fallback: default GRU config
             progress_head_config = {

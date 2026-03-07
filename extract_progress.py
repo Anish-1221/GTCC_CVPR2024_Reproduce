@@ -67,13 +67,19 @@ def extract_progress_for_video(model, video_data, times_dict, raw_features_tenso
         if action in ['SIL', 'background'] or start >= num_frames:
             continue
 
+        # Convert action label to index for conditioning
+        try:
+            action_idx = int(action) if action not in ['0', 'SIL', 'background'] else 0
+        except (ValueError, TypeError):
+            action_idx = 0
+
         # Extract progress frame by frame for this action segment
         pred_progress = []
         with torch.no_grad():
             for t in range(start, end + 1):
                 # Online: use frames from action start to current frame
                 partial_segment = outputs[start:t+1].to(device)
-                pred_t = progress_head(partial_segment)
+                pred_t = progress_head(partial_segment, action_idx=action_idx)
                 pred_progress.append(round(float(pred_t.item()), 4))
 
         # Calculate deltas (frame-to-frame improvement)
@@ -170,6 +176,11 @@ def load_model_for_extraction(folder_to_test, config, num_heads, device, ckpt_fi
                 'projection_dim': learnable_cfg.get('projection_dim', 128),
                 'output_activation': learnable_cfg.get('output_activation', 'sigmoid'),
                 'per_frame_count': learnable_cfg.get('per_frame_count', False),
+                # V10 action conditioning + rate-of-change
+                'use_action_conditioning': learnable_cfg.get('use_action_conditioning', False),
+                'num_actions': learnable_cfg.get('num_actions', 116),
+                'action_embed_dim': learnable_cfg.get('action_embed_dim', 16),
+                'use_rate_of_change': learnable_cfg.get('use_rate_of_change', False),
             }
 
     # Build model

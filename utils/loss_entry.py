@@ -17,6 +17,16 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BACKGROUND_LABELS = ['0', 'SIL', 'background']
 
 
+def _action_label_to_idx(step):
+    """Convert action label string to integer index. Background/unknown → 0."""
+    if step in BACKGROUND_LABELS:
+        return 0
+    try:
+        return int(step)
+    except (ValueError, TypeError):
+        return 0
+
+
 def _compute_learnable_progress_loss(output_dict, times, progress_head, learnable_config):
     """
     Shared progress loss computation for learnable head.
@@ -90,7 +100,8 @@ def _progress_loss_dense(output_dict, times, progress_head, cfg):
                 continue
 
             # Dense prediction: per-frame progress for the full action
-            pred = progress_head(action_emb, dense_output=True)  # (L,)
+            action_idx = _action_label_to_idx(step)
+            pred = progress_head(action_emb, dense_output=True, action_idx=action_idx)  # (L,)
 
             # Ground truth: linear ramp [1/L, 2/L, ..., 1.0]
             gt = torch.arange(1, L + 1, device=pred.device, dtype=pred.dtype) / L
@@ -144,27 +155,30 @@ def _progress_loss_uniform_mono(output_dict, times, progress_head, cfg):
             end_c = max(start_c, min(end, T - 1))
             full_emb = vid_emb[start_c:end_c + 1]
             if full_emb.shape[0] >= 2:
-                pred_end = progress_head(full_emb)
+                ep_action_idx = _action_label_to_idx(step)
+                pred_end = progress_head(full_emb, action_idx=ep_action_idx)
                 total_endpoint_loss = total_endpoint_loss + torch.abs(pred_end - 1.0)
                 num_endpoints += 1
 
         # Sample segments and compute L1 + monotonicity
         for _ in range(samples_per_video):
-            frame_samples = sample_action_segment_with_multiple_frames(
+            frame_samples, sampled_action = sample_action_segment_with_multiple_frames(
                 vid_emb, vid_times,
                 min_segment_len=min_seg_len,
                 frames_per_segment=frames_per_segment,
                 stratified=use_stratified,
                 adaptive_frames=use_adaptive_frames,
                 min_target_frames=min_target_frames,
-                max_target_frames=max_target_frames
+                max_target_frames=max_target_frames,
+                return_action_name=True
             )
+            sampled_action_idx = _action_label_to_idx(sampled_action) if sampled_action else 0
 
             # Collect predictions for monotonicity (all from same action, sorted by time)
             action_preds = []
             for seg_emb, gt_prog in frame_samples:
                 if seg_emb is not None and seg_emb.shape[0] >= 2:
-                    pred_prog = progress_head(seg_emb)
+                    pred_prog = progress_head(seg_emb, action_idx=sampled_action_idx)
                     gt_tensor = torch.tensor(gt_prog, device=pred_prog.device, dtype=pred_prog.dtype)
 
                     # Uniform L1
@@ -237,34 +251,37 @@ def _progress_loss_sqrt_weighted(output_dict, times, progress_head, cfg):
             start_c = max(0, min(start, T - 1))
             end_c = max(start_c, min(end, T - 1))
 
+            bnd_action_idx = _action_label_to_idx(step)
             first_emb = vid_emb[start_c:start_c + 1]
             if first_emb.shape[0] >= 1:
-                pred_first = progress_head(first_emb)
+                pred_first = progress_head(first_emb, action_idx=bnd_action_idx)
                 gt_first = 1.0 / action_len
                 total_boundary_loss = total_boundary_loss + boundary_weight * torch.abs(pred_first - gt_first)
                 num_boundary_samples += 1
 
             full_emb = vid_emb[start_c:end_c + 1]
             if full_emb.shape[0] >= 2:
-                pred_last = progress_head(full_emb)
+                pred_last = progress_head(full_emb, action_idx=bnd_action_idx)
                 total_boundary_loss = total_boundary_loss + boundary_weight * torch.abs(pred_last - 1.0)
                 num_boundary_samples += 1
 
         # Sampled segments with sqrt weighting
         for _ in range(samples_per_video):
-            frame_samples = sample_action_segment_with_multiple_frames(
+            frame_samples, sampled_action = sample_action_segment_with_multiple_frames(
                 vid_emb, vid_times,
                 min_segment_len=min_seg_len,
                 frames_per_segment=frames_per_segment,
                 stratified=use_stratified,
                 adaptive_frames=use_adaptive_frames,
                 min_target_frames=min_target_frames,
-                max_target_frames=max_target_frames
+                max_target_frames=max_target_frames,
+                return_action_name=True
             )
+            sampled_action_idx = _action_label_to_idx(sampled_action) if sampled_action else 0
 
             for seg_emb, gt_prog in frame_samples:
                 if seg_emb is not None and seg_emb.shape[0] >= 2:
-                    pred_prog = progress_head(seg_emb)
+                    pred_prog = progress_head(seg_emb, action_idx=sampled_action_idx)
                     gt_tensor = torch.tensor(gt_prog, device=pred_prog.device, dtype=pred_prog.dtype)
 
                     # Sqrt weighting: 1/sqrt(gt_prog) instead of 1/gt_prog
@@ -320,27 +337,30 @@ def _progress_loss_mse(output_dict, times, progress_head, cfg):
                 continue
             start_c = max(0, min(start, T - 1))
             end_c = max(start_c, min(end, T - 1))
+            mse_ep_action_idx = _action_label_to_idx(step)
             full_emb = vid_emb[start_c:end_c + 1]
             if full_emb.shape[0] >= 2:
-                pred_end = progress_head(full_emb)
+                pred_end = progress_head(full_emb, action_idx=mse_ep_action_idx)
                 total_endpoint_loss = total_endpoint_loss + (pred_end - 1.0) ** 2
                 num_endpoints += 1
 
         # Sampled segments with MSE
         for _ in range(samples_per_video):
-            frame_samples = sample_action_segment_with_multiple_frames(
+            frame_samples, sampled_action = sample_action_segment_with_multiple_frames(
                 vid_emb, vid_times,
                 min_segment_len=min_seg_len,
                 frames_per_segment=frames_per_segment,
                 stratified=use_stratified,
                 adaptive_frames=use_adaptive_frames,
                 min_target_frames=min_target_frames,
-                max_target_frames=max_target_frames
+                max_target_frames=max_target_frames,
+                return_action_name=True
             )
+            sampled_action_idx = _action_label_to_idx(sampled_action) if sampled_action else 0
 
             for seg_emb, gt_prog in frame_samples:
                 if seg_emb is not None and seg_emb.shape[0] >= 2:
-                    pred_prog = progress_head(seg_emb)
+                    pred_prog = progress_head(seg_emb, action_idx=sampled_action_idx)
                     gt_tensor = torch.tensor(gt_prog, device=pred_prog.device, dtype=pred_prog.dtype)
 
                     p_loss = (pred_prog - gt_tensor) ** 2
@@ -399,34 +419,37 @@ def _progress_loss_legacy(output_dict, times, progress_head, cfg):
                     continue
                 start_c = max(0, min(start, T - 1))
                 end_c = max(start_c, min(end, T - 1))
+                leg_action_idx = _action_label_to_idx(step)
 
                 first_emb = vid_emb[start_c:start_c + 1]
                 if first_emb.shape[0] >= 1:
-                    pred_first = progress_head(first_emb)
+                    pred_first = progress_head(first_emb, action_idx=leg_action_idx)
                     gt_first = 1.0 / action_len
                     total_boundary_loss += boundary_weight * torch.abs(pred_first - gt_first)
                     num_boundary_samples += 1
 
                 full_emb = vid_emb[start_c:end_c + 1]
                 if full_emb.shape[0] >= 2:
-                    pred_last = progress_head(full_emb)
+                    pred_last = progress_head(full_emb, action_idx=leg_action_idx)
                     total_boundary_loss += boundary_weight * torch.abs(pred_last - 1.0)
                     num_boundary_samples += 1
 
         for _ in range(samples_per_video):
-            frame_samples = sample_action_segment_with_multiple_frames(
+            frame_samples, sampled_action = sample_action_segment_with_multiple_frames(
                 vid_emb, vid_times,
                 min_segment_len=min_seg_len,
                 frames_per_segment=frames_per_segment,
                 stratified=use_stratified,
                 adaptive_frames=use_adaptive_frames,
                 min_target_frames=min_target_frames,
-                max_target_frames=max_target_frames
+                max_target_frames=max_target_frames,
+                return_action_name=True
             )
+            sampled_action_idx = _action_label_to_idx(sampled_action) if sampled_action else 0
 
             for seg_emb, gt_prog in frame_samples:
                 if seg_emb is not None and seg_emb.shape[0] >= 2:
-                    pred_prog = progress_head(seg_emb)
+                    pred_prog = progress_head(seg_emb, action_idx=sampled_action_idx)
                     gt_tensor = torch.tensor(gt_prog, device=pred_prog.device, dtype=pred_prog.dtype)
 
                     if use_weighted_loss:

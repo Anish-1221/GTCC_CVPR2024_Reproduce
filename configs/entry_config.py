@@ -126,6 +126,13 @@ def get_generic_config(multi_task_setting=False, delta=None, n_components=None):
     if progress_hidden_dim != 64:
         CONFIG.PROGRESS_LOSS['learnable']['hidden_dim'] = progress_hidden_dim
 
+    # V10 action conditioning + rate-of-change
+    if args_given.get('use_action_conditioning', False):
+        CONFIG.PROGRESS_LOSS['learnable']['use_action_conditioning'] = True
+        CONFIG.PROGRESS_LOSS['learnable']['action_embed_dim'] = args_given.get('action_embed_dim', 16)
+    if args_given.get('use_rate_of_change', False):
+        CONFIG.PROGRESS_LOSS['learnable']['use_rate_of_change'] = True
+
     # Progress-head-only training configuration
     CONFIG.TRAIN_PROGRESS_ONLY = args_given.get('train_progress_only', False)
     CONFIG.ALIGNMENT_CHECKPOINT = args_given.get('alignment_checkpoint', None)

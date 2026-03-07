@@ -67,6 +67,10 @@ def create_progress_head(input_dim, config):
             projection_dim=config.get('projection_dim', 128),
             output_activation=config.get('output_activation', 'sigmoid'),
             per_frame_count=config.get('per_frame_count', False),
+            use_action_conditioning=config.get('use_action_conditioning', False),
+            num_actions=config.get('num_actions', 116),
+            action_embed_dim=config.get('action_embed_dim', 16),
+            use_rate_of_change=config.get('use_rate_of_change', False),
         )
 
 
@@ -89,7 +93,9 @@ class ProgressHead(nn.Module):
     def __init__(self, input_dim=128, hidden_dim=64, use_gru=True, use_position_encoding=False,
                  use_frame_count=True, frame_count_max=300.0,
                  use_input_projection=False, projection_dim=128,
-                 output_activation='sigmoid', per_frame_count=False):
+                 output_activation='sigmoid', per_frame_count=False,
+                 use_action_conditioning=False, num_actions=116, action_embed_dim=16,
+                 use_rate_of_change=False):
         super(ProgressHead, self).__init__()
         self.use_gru = use_gru
         self.input_dim = input_dim
@@ -99,6 +105,15 @@ class ProgressHead(nn.Module):
         self.use_input_projection = use_input_projection
         self.output_activation = output_activation
         self.per_frame_count = per_frame_count
+        self.use_action_conditioning = use_action_conditioning
+        self.use_rate_of_change = use_rate_of_change
+
+        # Action-class conditioning: embed action type for disambiguation
+        if use_action_conditioning:
+            self.action_embedding = nn.Embedding(num_actions, action_embed_dim)
+            self.action_embed_dim = action_embed_dim
+        else:
+            self.action_embed_dim = 0
 
         # Input projection: reduces high-dim features (e.g. 2048) to manageable size
         if use_input_projection:
@@ -111,11 +126,15 @@ class ProgressHead(nn.Module):
             self.input_proj = None
             effective_input_dim = input_dim
 
-        # Calculate extra dimensions for position encoding and/or frame count
+        # Calculate extra dimensions for position encoding, frame count, action embed, rate-of-change
         extra_dims = 0
         if use_position_encoding:
             extra_dims += 1
         if use_frame_count or per_frame_count:
+            extra_dims += 1
+        if use_action_conditioning:
+            extra_dims += action_embed_dim
+        if use_rate_of_change:
             extra_dims += 1
         gru_input_dim = effective_input_dim + extra_dims
 
@@ -167,9 +186,9 @@ class ProgressHead(nn.Module):
                 # For sigmoid: sigmoid(-2) ≈ 0.12
                 self.fc[-2].bias.fill_(-2.0)
 
-    def forward(self, segment_embeddings, dense_output=False):
+    def forward(self, segment_embeddings, dense_output=False, action_idx=None):
         T = segment_embeddings.shape[0]
-        device = segment_embeddings.device
+        dev = segment_embeddings.device
 
         # Apply input projection if enabled (e.g. 2048→128)
         if self.input_proj is not None:
@@ -180,21 +199,37 @@ class ProgressHead(nn.Module):
 
         if self.use_position_encoding:
             # Position encoding: normalized frame index (0 to ~1)
-            positions = torch.arange(T, device=device, dtype=torch.float32) / max(T, 1)
+            positions = torch.arange(T, device=dev, dtype=torch.float32) / max(T, 1)
             positions = positions.unsqueeze(1)  # (T, 1)
             features_to_concat.append(positions)
 
         if self.per_frame_count:
             # Per-frame running count: unique value per frame (breaks GRU gate saturation)
             # log(1+i)/log(1+max_T) for i in 1..T
-            frame_indices = torch.arange(1, T + 1, device=device, dtype=torch.float32)
+            frame_indices = torch.arange(1, T + 1, device=dev, dtype=torch.float32)
             running_count = (torch.log1p(frame_indices) / math.log1p(self.frame_count_max)).unsqueeze(1)  # (T, 1)
             features_to_concat.append(running_count)
         elif self.use_frame_count:
             # Broadcast frame count: same value for all frames (legacy behavior)
             fc_value = math.log1p(T) / math.log1p(self.frame_count_max)
-            frame_count = torch.full((T, 1), fc_value, device=device, dtype=torch.float32)
+            frame_count = torch.full((T, 1), fc_value, device=dev, dtype=torch.float32)
             features_to_concat.append(frame_count)
+
+        # Action-class conditioning: broadcast action embedding to all frames
+        if self.use_action_conditioning:
+            if action_idx is None:
+                action_idx = 0  # fallback to unknown/background
+            action_idx_tensor = torch.tensor(action_idx, device=dev, dtype=torch.long)
+            action_emb = self.action_embedding(action_idx_tensor)  # (action_embed_dim,)
+            action_emb = action_emb.unsqueeze(0).expand(T, -1)  # (T, action_embed_dim)
+            features_to_concat.append(action_emb)
+
+        # Rate-of-change: frame-to-frame L2 distance on projected features
+        if self.use_rate_of_change:
+            diffs = torch.zeros(T, 1, device=dev)
+            if T > 1:
+                diffs[1:] = torch.norm(segment_embeddings[1:] - segment_embeddings[:-1], dim=1, keepdim=True)
+            features_to_concat.append(diffs)
 
         # Concatenate all features
         if len(features_to_concat) > 1:

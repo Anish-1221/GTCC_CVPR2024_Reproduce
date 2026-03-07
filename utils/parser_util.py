@@ -64,6 +64,14 @@ def prog_argparser():
     parser.add_argument('--per_frame_count', action='store_true',
         help='Use per-frame running count log(1+i)/log(1+max) instead of broadcast frame count')
 
+    # V10 action conditioning + rate-of-change
+    parser.add_argument('--use_action_conditioning', action='store_true',
+        help='Add action-class embedding to progress head input for disambiguation')
+    parser.add_argument('--action_embed_dim', type=int, default=16,
+        help='Dimension of action class embedding (default: 16)')
+    parser.add_argument('--use_rate_of_change', action='store_true',
+        help='Add frame-to-frame L2 distance as extra input feature to progress head')
+
     # Create a mutually exclusive group for the METHOD/LOSS
     loss_type = parser.add_mutually_exclusive_group(required=True)
     loss_type.add_argument('--TCC',  '--tcc', nargs='?', action='store', const='tcc', dest='loss_type', help='Loss type is TCC')
@@ -115,4 +123,7 @@ def prog_argparser():
         'progress_hidden_dim': args.progress_hidden_dim,
         'output_activation': args.output_activation,
         'per_frame_count': args.per_frame_count,
+        'use_action_conditioning': args.use_action_conditioning,
+        'action_embed_dim': args.action_embed_dim,
+        'use_rate_of_change': args.use_rate_of_change,
     }
