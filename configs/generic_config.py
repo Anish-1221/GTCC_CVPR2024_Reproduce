@@ -77,6 +77,12 @@ CONFIG.PROGRESS_LOSS = edict({
         'use_gru': True,
         'use_position_encoding': False,  # V4+: disabled by default
 
+        # V9 architecture fixes (anti-saturation)
+        'use_input_projection': False,   # Add Linear(input_dim→projection_dim) before GRU
+        'projection_dim': 128,           # Target dimension for input projection
+        'output_activation': 'sigmoid',  # 'sigmoid' or 'clamp' (clamped linear)
+        'per_frame_count': False,        # Per-frame log(1+i)/log(1+max) instead of broadcast
+
         # Transformer-specific config (used when architecture='transformer')
         'transformer_config': {
             'd_model': 64,

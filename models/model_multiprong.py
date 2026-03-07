@@ -63,6 +63,10 @@ def create_progress_head(input_dim, config):
             use_position_encoding=config.get('use_position_encoding', False),
             use_frame_count=use_frame_count,
             frame_count_max=frame_count_max,
+            use_input_projection=config.get('use_input_projection', False),
+            projection_dim=config.get('projection_dim', 128),
+            output_activation=config.get('output_activation', 'sigmoid'),
+            per_frame_count=config.get('per_frame_count', False),
         )
 
 
@@ -73,29 +77,47 @@ class ProgressHead(nn.Module):
     Supports multiple modes:
     - Legacy mode (use_position_encoding=False, use_frame_count=False): Original GRU
     - Position encoding mode: With relative position (0 to 1) concatenated
-    - Frame count mode (RECOMMENDED): With log-scale frame count feature
+    - Frame count mode: With log-scale frame count feature
+    - Per-frame running count mode (RECOMMENDED): Unique per-frame temporal signal
 
-    Frame count is the KEY feature that tells the model how many frames it has seen,
-    enabling it to predict progress correctly for both short and long actions.
-
-    Takes segment embeddings and predicts progress at the final frame.
+    Architecture fixes for 2048-d raw features (v9+):
+    - Input projection (2048→128) to avoid GRU compression bottleneck
+    - Wider GRU (128 hidden) for balanced capacity
+    - Clamped linear output (replaces sigmoid) for equal gradient flow
+    - Per-frame running count to break GRU update gate saturation
     """
     def __init__(self, input_dim=128, hidden_dim=64, use_gru=True, use_position_encoding=False,
-                 use_frame_count=True, frame_count_max=300.0):
+                 use_frame_count=True, frame_count_max=300.0,
+                 use_input_projection=False, projection_dim=128,
+                 output_activation='sigmoid', per_frame_count=False):
         super(ProgressHead, self).__init__()
         self.use_gru = use_gru
         self.input_dim = input_dim
         self.use_position_encoding = use_position_encoding
         self.use_frame_count = use_frame_count
         self.frame_count_max = frame_count_max
+        self.use_input_projection = use_input_projection
+        self.output_activation = output_activation
+        self.per_frame_count = per_frame_count
+
+        # Input projection: reduces high-dim features (e.g. 2048) to manageable size
+        if use_input_projection:
+            self.input_proj = nn.Sequential(
+                nn.Linear(input_dim, projection_dim),
+                nn.ReLU(),
+            )
+            effective_input_dim = projection_dim
+        else:
+            self.input_proj = None
+            effective_input_dim = input_dim
 
         # Calculate extra dimensions for position encoding and/or frame count
         extra_dims = 0
         if use_position_encoding:
             extra_dims += 1
-        if use_frame_count:
+        if use_frame_count or per_frame_count:
             extra_dims += 1
-        gru_input_dim = input_dim + extra_dims
+        gru_input_dim = effective_input_dim + extra_dims
 
         if use_gru:
             self.gru = nn.GRU(gru_input_dim, hidden_dim, num_layers=1,
@@ -103,30 +125,55 @@ class ProgressHead(nn.Module):
             # Learnable h0 only for new mode
             if use_position_encoding:
                 self.h0 = nn.Parameter(torch.zeros(1, 1, hidden_dim))
-            self.fc = nn.Sequential(
-                nn.Linear(hidden_dim, 32),
-                nn.ReLU(),
-                nn.Linear(32, 1),
-                nn.Sigmoid()
-            )
-        else:
-            self.fc = nn.Sequential(
-                nn.Linear(gru_input_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, 32),
-                nn.ReLU(),
-                nn.Linear(32, 1),
-                nn.Sigmoid()
-            )
 
-        # Initialize final bias toward low values (sigmoid(-2) ≈ 0.12)
-        # This helps the model start with low predictions instead of 0.5
+            if output_activation == 'clamp':
+                self.fc = nn.Sequential(
+                    nn.Linear(hidden_dim, 32),
+                    nn.ReLU(),
+                    nn.Linear(32, 1),
+                )
+            else:
+                self.fc = nn.Sequential(
+                    nn.Linear(hidden_dim, 32),
+                    nn.ReLU(),
+                    nn.Linear(32, 1),
+                    nn.Sigmoid()
+                )
+        else:
+            if output_activation == 'clamp':
+                self.fc = nn.Sequential(
+                    nn.Linear(gru_input_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim, 32),
+                    nn.ReLU(),
+                    nn.Linear(32, 1),
+                )
+            else:
+                self.fc = nn.Sequential(
+                    nn.Linear(gru_input_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim, 32),
+                    nn.ReLU(),
+                    nn.Linear(32, 1),
+                    nn.Sigmoid()
+                )
+
+        # Initialize final bias toward low values
         with torch.no_grad():
-            self.fc[-2].bias.fill_(-2.0)
+            if output_activation == 'clamp':
+                # For clamped linear: init bias to 0.1 (direct output, no sigmoid)
+                self.fc[-1].bias.fill_(0.1)
+            else:
+                # For sigmoid: sigmoid(-2) ≈ 0.12
+                self.fc[-2].bias.fill_(-2.0)
 
     def forward(self, segment_embeddings, dense_output=False):
         T = segment_embeddings.shape[0]
         device = segment_embeddings.device
+
+        # Apply input projection if enabled (e.g. 2048→128)
+        if self.input_proj is not None:
+            segment_embeddings = self.input_proj(segment_embeddings)
 
         # Build list of features to concatenate
         features_to_concat = [segment_embeddings]
@@ -137,9 +184,14 @@ class ProgressHead(nn.Module):
             positions = positions.unsqueeze(1)  # (T, 1)
             features_to_concat.append(positions)
 
-        if self.use_frame_count:
-            # Frame count: log-scale normalized (same value for all frames in segment)
-            # log(1+T) / log(1+max_T) keeps values bounded [0.12, ~1.1] for T in [1, 500]
+        if self.per_frame_count:
+            # Per-frame running count: unique value per frame (breaks GRU gate saturation)
+            # log(1+i)/log(1+max_T) for i in 1..T
+            frame_indices = torch.arange(1, T + 1, device=device, dtype=torch.float32)
+            running_count = (torch.log1p(frame_indices) / math.log1p(self.frame_count_max)).unsqueeze(1)  # (T, 1)
+            features_to_concat.append(running_count)
+        elif self.use_frame_count:
+            # Broadcast frame count: same value for all frames (legacy behavior)
             fc_value = math.log1p(T) / math.log1p(self.frame_count_max)
             frame_count = torch.full((T, 1), fc_value, device=device, dtype=torch.float32)
             features_to_concat.append(frame_count)
@@ -160,12 +212,17 @@ class ProgressHead(nn.Module):
             if dense_output:
                 # Apply FC to all timesteps → per-frame predictions
                 per_frame = self.fc(outputs.squeeze(0))  # (T, H) → (T, 1)
+                if self.output_activation == 'clamp':
+                    per_frame = torch.clamp(per_frame, 0.0, 1.0)
                 return per_frame.squeeze(-1)  # (T,)
             else:
                 progress = self.fc(h_n.squeeze())
         else:
             x = x.mean(dim=0)
             progress = self.fc(x)
+
+        if self.output_activation == 'clamp':
+            progress = torch.clamp(progress, 0.0, 1.0)
         return progress.squeeze()
 
 

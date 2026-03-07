@@ -51,6 +51,19 @@ def prog_argparser():
     parser.add_argument('--raw_features_path', type=str, default=None,
         help='Path to folder containing 2048-d raw feature .npy files (required when --progress_features raw)')
 
+    # V9 architecture fixes (anti-saturation)
+    parser.add_argument('--use_input_projection', action='store_true',
+        help='Add Linear(input_dim→projection_dim) + ReLU before GRU to reduce compression ratio')
+    parser.add_argument('--projection_dim', type=int, default=128,
+        help='Target dimension for input projection layer (default: 128)')
+    parser.add_argument('--progress_hidden_dim', type=int, default=64,
+        help='GRU hidden dimension (default: 64, use 128 with input projection)')
+    parser.add_argument('--output_activation', type=str, default='sigmoid',
+        choices=['sigmoid', 'clamp'],
+        help='Output activation: sigmoid (default) or clamp (clamped linear [0,1])')
+    parser.add_argument('--per_frame_count', action='store_true',
+        help='Use per-frame running count log(1+i)/log(1+max) instead of broadcast frame count')
+
     # Create a mutually exclusive group for the METHOD/LOSS
     loss_type = parser.add_mutually_exclusive_group(required=True)
     loss_type.add_argument('--TCC',  '--tcc', nargs='?', action='store', const='tcc', dest='loss_type', help='Loss type is TCC')
@@ -97,4 +110,9 @@ def prog_argparser():
         'progress_loss_mode': args.progress_loss_mode,
         'progress_features': args.progress_features,
         'raw_features_path': args.raw_features_path,
+        'use_input_projection': args.use_input_projection,
+        'projection_dim': args.projection_dim,
+        'progress_hidden_dim': args.progress_hidden_dim,
+        'output_activation': args.output_activation,
+        'per_frame_count': args.per_frame_count,
     }

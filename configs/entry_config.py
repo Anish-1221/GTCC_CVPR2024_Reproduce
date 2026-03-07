@@ -114,6 +114,18 @@ def get_generic_config(multi_task_setting=False, delta=None, n_components=None):
     # Path to raw 2048-d features folder (required when progress_features='raw')
     CONFIG.RAW_FEATURES_PATH = args_given.get('raw_features_path', None)
 
+    # V9 architecture fixes (anti-saturation)
+    if args_given.get('use_input_projection', False):
+        CONFIG.PROGRESS_LOSS['learnable']['use_input_projection'] = True
+        CONFIG.PROGRESS_LOSS['learnable']['projection_dim'] = args_given.get('projection_dim', 128)
+    if args_given.get('output_activation', 'sigmoid') != 'sigmoid':
+        CONFIG.PROGRESS_LOSS['learnable']['output_activation'] = args_given['output_activation']
+    if args_given.get('per_frame_count', False):
+        CONFIG.PROGRESS_LOSS['learnable']['per_frame_count'] = True
+    progress_hidden_dim = args_given.get('progress_hidden_dim', 64)
+    if progress_hidden_dim != 64:
+        CONFIG.PROGRESS_LOSS['learnable']['hidden_dim'] = progress_hidden_dim
+
     # Progress-head-only training configuration
     CONFIG.TRAIN_PROGRESS_ONLY = args_given.get('train_progress_only', False)
     CONFIG.ALIGNMENT_CHECKPOINT = args_given.get('alignment_checkpoint', None)
